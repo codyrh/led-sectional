@@ -1,31 +1,70 @@
+// To get a look at the XML output directly from a browser, edit the end of next line for an airport or airport list.
+// It's not identical to what the code receives, but can help a lot.
+// https://aviationweather.gov/adds/dataserver_current/httpparam?dataSource=metars&requestType=retrieve&format=xmlreading&hoursBeforeNow=3&mostRecentForEachStation=true&stationString=KCLL,KOCF
+
+/*
+ April 27, 2023
+ CHANGE LIST from Kyle Harmon's Code at https://github.com/WKHarmon/led-sectional
+ --------------------------------------------------------------------------------
+ 1. Added WiFiManger
+	See this reference: https://randomnerdtutorials.com/wifimanager-with-esp8266-autoconnect-custom-parameter-and-manage-your-ssid-and-password/
+	This has two benefits:
+		a) Permits easy setup if moving to a new WiFi network,
+		b) Makes a WiFi connection reliably vs being problematic with some routers that won't connect without forcing 802.11g, e.g.
+           WiFi.setPhyMode(WIFI_PHY_MODE_11G); // from a tip at https://github.com/esp8266/Arduino/issues/8299
+           Good reference: https://randomnerdtutorials.com/wifimanager-with-esp8266-autoconnect-custom-parameter-and-manage-your-ssid-and-password/
+ 2. High wind (orange) color will now blink vs being a solid orange, and be shown for all flight categories, not just VFR
+ 3. Lightning (white blink) will occur not just for TS (thunderstorms), but also for LTG and LTNG reported in <raw_text> in response XML
+
+ As a result of 2 and 3, any particular LED could have 3 colors...one for flight category, and blinking either or both of orange and white.
+*/
+
+// Use EXP8266 Core V2.74, and FastLED V3.30
+
+
+/*
+Issues
+------
+IF an airport isn't reporting flight category, but has high winds, lightning or thunderstorms, you get the blink colors but no flight category (blank).
+Better behavior might be to skip that LED?
+
+Still need to test winds, lightning and storms at same airport*/
+
 #include <ESP8266WiFi.h>
 #include <FastLED.h>
 #include <vector>
+#include <DNSServer.h>        // for WiFiManager
+#include <ESP8266WebServer.h> // for WiFiManager
+#include <WiFiManager.h>      // https://github.com/tzapu/WiFiManager
 using namespace std;
 
 #define FASTLED_ESP8266_RAW_PIN_ORDER
 
-#define NUM_AIRPORTS 80 // This is really the number of LEDs
-#define WIND_THRESHOLD 25 // Maximum windspeed for green, otherwise the LED turns yellow
-#define LOOP_INTERVAL 5000 // ms - interval between brightness updates and lightning strikes
-#define DO_LIGHTNING true // Lightning uses more power, but is cool.
-#define DO_WINDS true // color LEDs for high winds
-#define REQUEST_INTERVAL 900000 // How often we update. In practice LOOP_INTERVAL is added. In ms (15 min is 900000)
+#define NUM_AIRPORTS 25        // This is the number of airports in list, including nulls, NOT # LEDs in string.
+#define WIND_THRESHOLD 15      // Winds or gusting winds above this cause LED to blink orange
+#define LOOP_INTERVAL 5000     // Interval in ms between brightness updates, and lightning/storm, high wind blinks
+#define DO_LIGHTNING true      // Causes LED to blink white for thunderstorms or lightning
+#define DO_WINDS true          // Causes LED to blink orange if winds exceed WIND_THRESHOLD
+boolean HIGH_WINDS = false;    // Initialize global var
+#define REQUEST_INTERVAL 60000 // Interval in ms for METAR updates. In practice LOOP_INTERVAL is added.
 
-#define USE_LIGHT_SENSOR false // Set USE_LIGHT_SENSOR to true if you're using any light sensor.
-// Set LIGHT_SENSOR_TSL2561 to true if you're using a TSL2561 digital light sensor.
-// Kits shipped after March 1, 2019 have a digital light sensor. Setting this to false assumes an analog light sensor.
-#define LIGHT_SENSOR_TSL2561 false
+#define USE_LIGHT_SENSOR false      // Set true if you're using any light sensor.
+#define LIGHT_SENSOR_TSL2561 false  // Set true if you're using a TSL2561 digital light sensor.  False assumes an analog sensor.
 
-const char ssid[] = "EDITME"; // your network SSID (name)
-const char pass[] = "EDITME"; // your network password (use for WPA, or use as key for WEP)
+// WiFi Management for ESP8266
+WiFiManager wm;
+#define WIFI_TIMEOUT 60        // Connection timeout in seconds for call to setConfigPortalTimeout
 
 // Define the array of leds
 CRGB leds[NUM_AIRPORTS];
-#define DATA_PIN    14 // Kits shipped after March 1, 2019 should use 14. Earlier kits us 5.
+#define DATA_PIN    5 // Kits shipped after March 1, 2019 should use 14. Earlier kits us 5.
+                      // I'm using pin D5 (which is GPIO14) on my ESP8266 12-E NodeMCU in April, 2023.  Setting this to 5 works fine.
+
+//WS2812 and RGB for LED roll
 #define LED_TYPE    WS2811
 #define COLOR_ORDER RGB
-#define BRIGHTNESS 20 // 20-30 recommended. If using a light sensor, this is the initial brightness on boot.
+#define BRIGHTNESS 100 // 20-30 suggested for LED strip, 3+ times that for bulbs.
+                       // If using a light sensor, this is the initial brightness on boot.
 
 /* This section only applies if you have an ambient light sensor connected */
 #if USE_LIGHT_SENSOR
@@ -52,110 +91,51 @@ Adafruit_TSL2561_Unified tsl = Adafruit_TSL2561_Unified(TSL2561_ADDR_FLOAT, 1234
 /* ----------------------------------------------------------------------- */
 
 std::vector<unsigned short int> lightningLeds;
+std::vector<unsigned short int> windLeds;
+
 std::vector<String> airports({
-  "LIFR", // 1 order of LEDs, starting with 1 should be KKIC; use VFR, WVFR, MVFR, IFR, LIFR for key; NULL for no airport
-  "IFR", // 2
-  "MVFR", // 3
-  "WVFR", // 4
-  "VFR", // 5
-  "NULL", // 6
-  "NULL", // 7
-  "KMRY", // 8
-  "KSNS", // 9
-  "KCVH", // 10
-  "KWVI", // 11
-  "KE16", // 12
-  "KRHV", // 13
-  "KSJC", // 14
-  "KNUQ", // 15
-  "KPAO", // 16
-  "KSQL", // 17
-  "KHAF", // 18
-  "KSFO", // 19
-  "KOAK", // 20
-  "KHWD", // 21
-  "KLVK", // 22
-  "KC83", // 23
-  "NULL", // 24
-  "KCCR", // 25
-  "NULL", // 26
-  "KDVO", // 27
-  "KO69", // 28
-  "KSTS", // 29
-  "NULL", // 30
-  "KAPC", // 31
-  "KSUU", // 32
-  "KVCB", // 33
-  "KEDU", // 34
-  "KSMF", // 35
-  "KSAC", // 36
-  "KMHR", // 37
-  "KMCC", // 38
-  "KLHM", // 39
-  "KMYV", // 40
-  "KBAB", // 41
-  "NULL", // 42
-  "KOVE", // 43
-  "NULL", // 44
-  "KCIC", // 45
-  "NULL", // 46
-  "KRBL", // 47
-  "NULL", // 48
-  "NULL", // 49
-  "NULL", // 50
-  "KGOO", // 51
-  "KBLU", // 52
-  "NULL", // 53
-  "KTRK", // 54
-  "KRNO", // 55
-  "KCXP", // 56
-  "KMEV", // 57
-  "KTVL", // 58
-  "NULL", // 59
-  "NULL", // 60
-  "KAUN", // 61
-  "KPVF", // 62
-  "KJAQ", // 63
-  "KCPU", // 64
-  "KO22", // 65
-  "NULL", // 66
-  "NULL", // 67
-  "KSCK", // 68
-  "KTCY", // 69
-  "NULL", // 70
-  "KMOD", // 71
-  "NULL", // 72
-  "KMER", // 73
-  "MKCE", // 74
-  "NULL", // 75
-  "KMAE", // 76
-  "NULL", // 77
-  "KFAT", // 78
-  "NULL", // 79
-  "KNLC" // 80
+"KDEN", //1  Note LED # in serial output is 1 less, e.g. third in this list will be LED 2.
+"KORD", //2
+"KMAI", //3 
+"KBGE",
+"KT41", //4
+"KEFD", //5
+"KHOU", //6
+"KLVJ", //7
+"KAXH", //8
+"KSGR", //9
+"KBYY", //10
+"KARM", //11
+"KELA", //12
+"KTME", //13
+"KDWH", //14
+"KIAH", //15
+"KT78", //16
+"K6R3", //17
+"KCXO", //18
+"KUTS", //19
+"KCFD", //20
+"KCLL", //21
+"K11R", //22
+"KLBX", //23
+"KGLS"  //24
 });
 
 #define DEBUG false
 
-#define READ_TIMEOUT 15 // Cancel query if no data received (seconds)
-#define WIFI_TIMEOUT 60 // in seconds
+#define READ_TIMEOUT 15     // Cancel query if no data received (seconds)
 #define RETRY_TIMEOUT 15000 // in ms
 
 #define SERVER "www.aviationweather.gov"
 #define BASE_URI "/adds/dataserver_current/httpparam?dataSource=metars&requestType=retrieve&format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&stationString="
 
-boolean ledStatus = true; // used so leds only indicate connection status on first boot, or after failure
-int loops = -1;
+boolean ledStatus = true;   // used so leds only indicate connection status on first boot, or after failure
+int loops = -1;             // "loops" used only to set blink colors for high winds, thunderstorms and/or lightning, if any found
 
 int status = WL_IDLE_STATUS;
 
 void setup() {
-  //Initialize serial and wait for port to open:
-  Serial.begin(74880);
-  //pinMode(D1, OUTPUT); //Declare Pin mode
-  //while (!Serial) {
-  //    ; // wait for serial port to connect. Needed for native USB
-  //}
+  Serial.begin(115200);     // initial serial port
 
   pinMode(LED_BUILTIN, OUTPUT); // give us control of the onboard LED
   digitalWrite(LED_BUILTIN, LOW);
@@ -178,7 +158,7 @@ void setup() {
   // Initialize LEDs
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_AIRPORTS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
-}
+}  // END SETUP
 
 #if USE_LIGHT_SENSOR
 void adjustBrightness() {
@@ -224,51 +204,67 @@ void loop() {
   Serial.print("Loop: ");
   Serial.println(loops);
   unsigned int loopThreshold = 1;
-  if (DO_LIGHTNING || USE_LIGHT_SENSOR) loopThreshold = REQUEST_INTERVAL / LOOP_INTERVAL;
+  if (DO_LIGHTNING || DO_WINDS || USE_LIGHT_SENSOR)
+    loopThreshold = REQUEST_INTERVAL / LOOP_INTERVAL;
 
-  // Connect to WiFi. We always want a wifi connection for the ESP8266
+  // Connect to WiFi
   if (WiFi.status() != WL_CONNECTED) {
     if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Orange); // indicate status with LEDs, but only on first run or error
     FastLED.show();
     WiFi.mode(WIFI_STA);
-    WiFi.hostname("LED Sectional " + WiFi.macAddress());
-    //wifi_set_sleep_type(LIGHT_SLEEP_T); // use light sleep mode for all delays
-    Serial.print("WiFi connecting..");
-    WiFi.begin(ssid, pass);
-    // Wait up to 1 minute for connection...
-    for (c = 0; (c < WIFI_TIMEOUT) && (WiFi.status() != WL_CONNECTED); c++) {
-      Serial.write('.');
-      delay(1000);
-    }
-    if (c >= WIFI_TIMEOUT) { // If it didn't connect within WIFI_TIMEOUT
-      Serial.println("Failed. Will retry...");
-      fill_solid(leds, NUM_AIRPORTS, CRGB::Orange);
-      FastLED.show();
-      ledStatus = true;
-      return;
-    }
-    Serial.println("OK!");
-    if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Purple); // indicate status with LEDs
+    wm.setConfigPortalTimeout(WIFI_TIMEOUT);
+  }
+  if (wm.autoConnect()) {
+    Serial.println("Connected to local network");
+    if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Purple);
     FastLED.show();
     ledStatus = false;
   }
+  else {
+    Serial.println("Failed to connect to local network or hit timeout");
+    fill_solid(leds, NUM_AIRPORTS, CRGB::Orange);
+    FastLED.show();
+    ledStatus = true;
+    wm.autoConnect("AutoConnectAP");  // should popup signin else goto 192.168.4.1 after connecting to AutoConnectAP or ESPxxxx
+    return;
+  }
 
-  // Do some lightning
+  // Blink white if thunderstorms (TS) found in <wx_string> or if lightning (LTG or LTNG) found in <raw_text>
   if (DO_LIGHTNING && lightningLeds.size() > 0) {
     std::vector<CRGB> lightning(lightningLeds.size());
-    for (unsigned short int i = 0; i < lightningLeds.size(); ++i) {
+      for (unsigned short int i = 0; i < lightningLeds.size(); ++i) {
       unsigned short int currentLed = lightningLeds[i];
       lightning[i] = leds[currentLed]; // temporarily store original color
-      leds[currentLed] = CRGB::White; // set to white briefly
+      leds[currentLed] = CRGB::White;  // set to white briefly
       Serial.print("Lightning on LED: ");
       Serial.println(currentLed);
     }
     delay(25); // extra delay seems necessary with light sensor
     FastLED.show();
-    delay(25);
+    delay(1000);
     for (unsigned short int i = 0; i < lightningLeds.size(); ++i) {
       unsigned short int currentLed = lightningLeds[i];
       leds[currentLed] = lightning[i]; // restore original color
+    }
+    FastLED.show();
+  }
+
+  // Blink orange if winds or gusts exceed WIND_THRESHOLD
+  if (DO_WINDS && windLeds.size() > 0) {
+    std::vector<CRGB> highwind(windLeds.size());
+    for (unsigned short int i = 0; i < windLeds.size(); ++i) {
+      unsigned short int currentLed = windLeds[i];
+      highwind[i] = leds[currentLed];  // temporarily store original color
+      leds[currentLed] = CRGB::Yellow; // set to yellow briefly
+      Serial.print("High wind on LED: ");
+      Serial.println(currentLed);
+    }
+    delay(25); // extra delay seems necessary with light sensor
+    FastLED.show();
+    delay(1000);
+    for (unsigned short int i = 0; i < windLeds.size(); ++i) {
+      unsigned short int currentLed = windLeds[i];
+      leds[currentLed] = highwind[i]; // restore original color
     }
     FastLED.show();
   }
@@ -284,12 +280,13 @@ void loop() {
     if (getMetars()) {
       Serial.println("Refreshing LEDs.");
       FastLED.show();
-      if ((DO_LIGHTNING && lightningLeds.size() > 0) || USE_LIGHT_SENSOR) {
-        Serial.println("There is lightning or we're using a light sensor, so no long sleep.");
+      if ((DO_LIGHTNING && lightningLeds.size() > 0) || (DO_WINDS && windLeds.size() > 0) || USE_LIGHT_SENSOR) {
+        Serial.println("There is lightning, thunderstorms or high wind, or we're using a light sensor, so no long sleep.");
         digitalWrite(LED_BUILTIN, HIGH);
         delay(LOOP_INTERVAL); // pause during the interval
-      } else {
-        Serial.print("No lightning; Going into sleep for: ");
+      }
+      else {
+        Serial.print("No thunderstorms or lightning. Going into sleep for: ");
         Serial.println(REQUEST_INTERVAL);
         digitalWrite(LED_BUILTIN, HIGH);
         delay(REQUEST_INTERVAL);
@@ -300,22 +297,25 @@ void loop() {
     }
   } else {
     digitalWrite(LED_BUILTIN, HIGH);
-    delay(LOOP_INTERVAL); // pause during the interval
+    delay(LOOP_INTERVAL);   // pause during the interval
   }
 }
 
 bool getMetars(){
   lightningLeds.clear(); // clear out existing lightning LEDs since they're global
+  windLeds.clear();
   fill_solid(leds, NUM_AIRPORTS, CRGB::Black); // Set everything to black just in case there is no report
   uint32_t t;
   char c;
+  boolean readingRawText = false;
   boolean readingAirport = false;
   boolean readingCondition = false;
   boolean readingWind = false;
   boolean readingGusts = false;
   boolean readingWxstring = false;
-
+  
   std::vector<unsigned short int> led;
+  String currentRawText = "";
   String currentAirport = "";
   String currentCondition = "";
   String currentLine = "";
@@ -324,8 +324,10 @@ bool getMetars(){
   String currentWxstring = "";
   String airportString = "";
   bool firstAirport = true;
+  
+  // Build comma-separated list of airport IDs from airport string vector (list) to send to www.aviationweather.gov
   for (int i = 0; i < NUM_AIRPORTS; i++) {
-    if (airports[i] != "NULL" && airports[i] != "VFR" && airports[i] != "MVFR" && airports[i] != "WVFR" && airports[i] != "IFR" && airports[i] != "LIFR") {
+    if (airports[i] != "NULL" && airports[i] != "VFR" && airports[i] != "MVFR" && airports[i] != "IFR" && airports[i] != "LIFR") {
       if (firstAirport) {
         firstAirport = false;
         airportString = airports[i];
@@ -336,7 +338,6 @@ bool getMetars(){
   BearSSL::WiFiClientSecure client;
   client.setInsecure();
   Serial.println("\nStarting connection to server...");
-  // if you get a connection, report back via serial:
   if (!client.connect(SERVER, 443)) {
     Serial.println("Connection failed!");
     client.stop();
@@ -352,7 +353,7 @@ bool getMetars(){
     Serial.println("User-Agent: LED Map Client");
     Serial.println("Connection: close");
     Serial.println();
-    // Make a HTTP request, and print it to console:
+    // Make the GET request, and print it to console
     client.print("GET ");
     client.print(BASE_URI);
     client.print(airportString);
@@ -385,30 +386,37 @@ bool getMetars(){
         yield(); // Otherwise the WiFi stack can crash
         currentLine += c;
         if (c == '\n') currentLine = "";
-        if (currentLine.endsWith("<station_id>")) { // start paying attention
-          if (!led.empty()) { // we assume we are recording results at each change in airport
-            for (vector<unsigned short int>::iterator it = led.begin(); it != led.end(); ++it) {
-              doColor(currentAirport, *it, currentWind.toInt(), currentGusts.toInt(), currentCondition, currentWxstring);
-            }
-            led.clear();
-          }
-          currentAirport = ""; // Reset everything when the airport changes
-          readingAirport = true;
+        if (currentLine.endsWith("<raw_text>")) { // start paying attention
+             if (!led.empty()) {                  // we assume we are recording results at each change in airport
+               for (vector<unsigned short int>::iterator it = led.begin(); it != led.end(); ++it)  {
+                 doColor(currentAirport, *it, currentWind.toInt(), currentGusts.toInt(), currentCondition, currentWxstring, currentRawText);
+               }
+             led.clear();
+             }
+          currentRawText = "";
+          currentAirport = "";                    // Reset everything when the airport changes
+          readingRawText = true;
           currentCondition = "";
           currentWind = "";
           currentGusts = "";
           currentWxstring = "";
+        } else if (readingRawText)  {
+            if (!currentLine.endsWith("<"))
+              currentRawText += c;
+            else
+              readingRawText = false;
+         } else if (currentLine.endsWith("<station_id>")) { 
+          readingAirport = true;
         } else if (readingAirport) {
-          if (!currentLine.endsWith("<")) {
-            currentAirport += c;
-          } else {
-            readingAirport = false;
-            for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
-              if (airports[i] == currentAirport) {
-                led.push_back(i);
+            if (!currentLine.endsWith("<"))
+              currentAirport += c;
+            else {
+              readingAirport = false;
+              for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
+                if (airports[i] == currentAirport)
+                  led.push_back(i);
               }
             }
-          }
         } else if (currentLine.endsWith("<wind_speed_kt>")) {
           readingWind = true;
         } else if (readingWind) {
@@ -436,11 +444,10 @@ bool getMetars(){
         } else if (currentLine.endsWith("<wx_string>")) {
           readingWxstring = true;
         } else if (readingWxstring) {
-          if (!currentLine.endsWith("<")) {
+          if (!currentLine.endsWith("<"))
             currentWxstring += c;
-          } else {
+          else
             readingWxstring = false;
-          }
         }
         t = millis(); // Reset timeout clock
       } else if ((millis() - t) >= (READ_TIMEOUT * 1000)) {
@@ -455,15 +462,14 @@ bool getMetars(){
   }
   // need to doColor this for the last airport
   for (vector<unsigned short int>::iterator it = led.begin(); it != led.end(); ++it) {
-    doColor(currentAirport, *it, currentWind.toInt(), currentGusts.toInt(), currentCondition, currentWxstring);
+    doColor(currentAirport, *it, currentWind.toInt(), currentGusts.toInt(), currentCondition, currentWxstring, currentRawText);
   }
   led.clear();
 
   // Do the key LEDs now if they exist
   for (int i = 0; i < (NUM_AIRPORTS); i++) {
-    // Use this opportunity to set colors for LEDs in our key then build the request string
+    // Use this opportunity to set colors for LEDs in our key
     if (airports[i] == "VFR") leds[i] = CRGB::Green;
-    else if (airports[i] == "WVFR") leds[i] = CRGB::Yellow;
     else if (airports[i] == "MVFR") leds[i] = CRGB::Blue;
     else if (airports[i] == "IFR") leds[i] = CRGB::Red;
     else if (airports[i] == "LIFR") leds[i] = CRGB::Magenta;
@@ -473,7 +479,7 @@ bool getMetars(){
   return true;
 }
 
-void doColor(String identifier, unsigned short int led, int wind, int gusts, String condition, String wxstring) {
+void doColor(String identifier, unsigned short int led, int wind, int gusts, String condition, String wxstring, String currentRawText) {
   CRGB color;
   Serial.print(identifier);
   Serial.print(": ");
@@ -486,20 +492,25 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   Serial.print(led);
   Serial.print(" WX: ");
   Serial.println(wxstring);
-  if (wxstring.indexOf("TS") != -1) {
-    Serial.println("... found lightning!");
+  Serial.println(currentRawText);
+  
+  // LTG or LTNG for lightning is in raw_text of METAR, not in any other XML field.
+  // We'll blink white for either or both of lightning and thunderstorms.
+  if ((wxstring.indexOf("TS") != -1) || (currentRawText.indexOf("LTG") != -1) || (currentRawText.indexOf("LTNG") != -1)) {
+    Serial.println("... found thunderstorms or lightning!");
     lightningLeds.push_back(led);
   }
+  if ((wind > WIND_THRESHOLD) || (gusts > WIND_THRESHOLD)) {
+    Serial.println("... found high winds or gusts!");
+    HIGH_WINDS = true;
+    windLeds.push_back(led);
+  }
+
   if (condition == "LIFR" || identifier == "LIFR") color = CRGB::Magenta;
   else if (condition == "IFR") color = CRGB::Red;
   else if (condition == "MVFR") color = CRGB::Blue;
-  else if (condition == "VFR") {
-    if ((wind > WIND_THRESHOLD || gusts > WIND_THRESHOLD) && DO_WINDS) {
-      color = CRGB::Yellow;
-    } else {
-      color = CRGB::Green;
-    }
-  } else color = CRGB::Black;
+  else if (condition == "VFR")color = CRGB::Green;
+  else color = CRGB::Black;  // if no flight category was reported
 
   leds[led] = color;
 }
