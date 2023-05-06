@@ -1,8 +1,15 @@
+// Use EXP8266 Core V2.74, and FastLED V3.30
+
 // To get a look at the XML output directly from a browser, edit the end of next line for an airport or airport list.
-// It's not identical to what the code receives, but can help a lot.
+// It's not identical to what the code receives, but can be helpful.
 // https://aviationweather.gov/adds/dataserver_current/httpparam?dataSource=metars&requestType=retrieve&format=xmlreading&hoursBeforeNow=3&mostRecentForEachStation=true&stationString=KCLL,KOCF
 
 /*
+ May 5, 2023
+ -----------
+ Fixed wifi connection logic.  Previously was doing an autoconnect every time a loop
+ occurred, which is whenever there is lighting or thunderstorms or high winds found.
+ 
  April 27, 2023
  CHANGE LIST from Kyle Harmon's Code at https://github.com/WKHarmon/led-sectional
  --------------------------------------------------------------------------------
@@ -17,18 +24,12 @@
  3. Lightning (white blink) will occur not just for TS (thunderstorms), but also for LTG and LTNG reported in <raw_text> in response XML
 
  As a result of 2 and 3, any particular LED could have 3 colors...one for flight category, and blinking either or both of orange and white.
-*/
 
-// Use EXP8266 Core V2.74, and FastLED V3.30
-
-
-/*
 Issues
 ------
-IF an airport isn't reporting flight category, but has high winds, lightning or thunderstorms, you get the blink colors but no flight category (blank).
+If an airport isn't reporting flight category, but has high winds, lightning or thunderstorms, you get the blink colors but no flight category (blank).
 Better behavior might be to skip that LED?
-
-Still need to test winds, lightning and storms at same airport*/
+*/
 
 #include <ESP8266WiFi.h>
 #include <FastLED.h>
@@ -40,7 +41,7 @@ using namespace std;
 
 #define FASTLED_ESP8266_RAW_PIN_ORDER
 
-#define NUM_AIRPORTS 25        // This is the number of airports in list, including nulls, NOT # LEDs in string.
+#define NUM_AIRPORTS 21        // This is the number of airports in list, including nulls, NOT # LEDs in string.
 #define WIND_THRESHOLD 15      // Winds or gusting winds above this cause LED to blink orange
 #define LOOP_INTERVAL 5000     // Interval in ms between brightness updates, and lightning/storm, high wind blinks
 #define DO_LIGHTNING true      // Causes LED to blink white for thunderstorms or lightning
@@ -54,16 +55,18 @@ boolean HIGH_WINDS = false;    // Initialize global var
 // WiFi Management for ESP8266
 WiFiManager wm;
 #define WIFI_TIMEOUT 60        // Connection timeout in seconds for call to setConfigPortalTimeout
+boolean isWiFiConnected = false;
+
 
 // Define the array of leds
 CRGB leds[NUM_AIRPORTS];
 #define DATA_PIN    5 // Kits shipped after March 1, 2019 should use 14. Earlier kits us 5.
                       // I'm using pin D5 (which is GPIO14) on my ESP8266 12-E NodeMCU in April, 2023.  Setting this to 5 works fine.
 
-//WS2812 and RGB for LED roll
-#define LED_TYPE    WS2811
-#define COLOR_ORDER RGB
-#define BRIGHTNESS 100 // 20-30 suggested for LED strip, 3+ times that for bulbs.
+//WS2812 and GRB for LED string from AliExpress
+#define LED_TYPE    WS2812
+#define COLOR_ORDER GRB
+#define BRIGHTNESS 30  // 20-30 suggested for LED strip
                        // If using a light sensor, this is the initial brightness on boot.
 
 /* This section only applies if you have an ambient light sensor connected */
@@ -87,38 +90,34 @@ Adafruit_TSL2561_Unified tsl = Adafruit_TSL2561_Unified(TSL2561_ADDR_FLOAT, 1234
 #define LIGHTSENSORPIN A0 // A0 is the only valid pin for an analog light sensor
 #endif
 
-#endif
+#endif  // USE_LIGHT_SENSOR
 /* ----------------------------------------------------------------------- */
 
 std::vector<unsigned short int> lightningLeds;
 std::vector<unsigned short int> windLeds;
 
 std::vector<String> airports({
-"KDEN", //1  Note LED # in serial output is 1 less, e.g. third in this list will be LED 2.
-"KORD", //2
-"KMAI", //3 
-"KBGE",
-"KT41", //4
-"KEFD", //5
-"KHOU", //6
-"KLVJ", //7
-"KAXH", //8
-"KSGR", //9
-"KBYY", //10
-"KARM", //11
-"KELA", //12
-"KTME", //13
-"KDWH", //14
-"KIAH", //15
-"KT78", //16
-"K6R3", //17
-"KCXO", //18
-"KUTS", //19
-"KCFD", //20
-"KCLL", //21
-"K11R", //22
-"KLBX", //23
-"KGLS"  //24
+"KGLS", //1  Note LED # in serial output is 1 less, e.g. third in this list will be LED 2.
+"KT41", //2
+"KEFD", //3 
+"KHOU", //4
+"KLVJ", //5
+"KAXH", //6
+"KSGR", //7
+"KLBX", //8
+"KBYY", //9
+"KARM", //10
+"KELA", //11
+"KTME", //12
+"KDWH", //13
+"KIAH", //14
+"KT78", //15
+"K6R3", //16
+"KCXO", //17
+"KUTS", //18
+"KCFD", //19
+"KCLL", //20
+"K11R"  //21
 });
 
 #define DEBUG false
@@ -152,12 +151,17 @@ void setup() {
   }
   #else
   pinMode(LIGHTSENSORPIN, INPUT);
-  #endif
-  #endif
+  #endif //LIGHT_SENSOR_TSL2561
+  #endif //USE_LIGHT_SENSOR
 
   // Initialize LEDs
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_AIRPORTS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
+
+  WiFi.mode(WIFI_STA);
+  wm.setConfigPortalTimeout(WIFI_TIMEOUT);
+  wm.setConnectTimeout(WIFI_TIMEOUT);
+
 }  // END SETUP
 
 #if USE_LIGHT_SENSOR
@@ -171,7 +175,7 @@ void adjustBrightness() {
   reading = event.light;
   #else
   reading = analogRead(LIGHTSENSORPIN);
-  #endif
+  #endif // LIGHT_SENSOR_TSL2561
 
   Serial.print("Light reading: ");
   Serial.print(reading);
@@ -190,7 +194,7 @@ void adjustBrightness() {
   FastLED.setBrightness(brightness);
   FastLED.show();
 }
-#endif
+#endif // USE_LIGHT_SENSOR
 
 void loop() {
   digitalWrite(LED_BUILTIN, LOW); // on if we're awake
@@ -207,26 +211,26 @@ void loop() {
   if (DO_LIGHTNING || DO_WINDS || USE_LIGHT_SENSOR)
     loopThreshold = REQUEST_INTERVAL / LOOP_INTERVAL;
 
+
   // Connect to WiFi
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!isWiFiConnected) {
     if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Orange); // indicate status with LEDs, but only on first run or error
     FastLED.show();
-    WiFi.mode(WIFI_STA);
-    wm.setConfigPortalTimeout(WIFI_TIMEOUT);
-  }
-  if (wm.autoConnect()) {
-    Serial.println("Connected to local network");
-    if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Purple);
-    FastLED.show();
-    ledStatus = false;
-  }
-  else {
-    Serial.println("Failed to connect to local network or hit timeout");
-    fill_solid(leds, NUM_AIRPORTS, CRGB::Orange);
-    FastLED.show();
-    ledStatus = true;
-    wm.autoConnect("AutoConnectAP");  // should popup signin else goto 192.168.4.1 after connecting to AutoConnectAP or ESPxxxx
-    return;
+    isWiFiConnected = wm.autoConnect();
+    if (isWiFiConnected) {
+      Serial.println("Connected to local network");
+      if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Purple);
+      FastLED.show();
+      ledStatus = false;
+    }
+    else {
+      Serial.println("Failed to connect to local network or hit timeout");
+      fill_solid(leds, NUM_AIRPORTS, CRGB::Orange);
+      FastLED.show();
+      ledStatus = true;
+      wm.autoConnect("AutoConnectAP");  // should popup signin else goto 192.168.4.1 after connecting to AutoConnectAP or ESPxxxx
+      return;
+    }
   }
 
   // Blink white if thunderstorms (TS) found in <wx_string> or if lightning (LTG or LTNG) found in <raw_text>
