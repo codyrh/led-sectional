@@ -5,6 +5,10 @@
 // https://aviationweather.gov/adds/dataserver_current/httpparam?dataSource=metars&requestType=retrieve&format=xmlreading&hoursBeforeNow=3&mostRecentForEachStation=true&stationString=KCLL,KOCF
 
 /*
+ October 19, 2023
+ ----------------
+ Updated SERVER and BASE_URI to reflect aviationweather.gov changes.
+  
  May 5, 2023
  -----------
  Fixed wifi connection logic.  Previously was doing an autoconnect every time a loop
@@ -125,8 +129,8 @@ std::vector<String> airports({
 #define READ_TIMEOUT 15     // Cancel query if no data received (seconds)
 #define RETRY_TIMEOUT 15000 // in ms
 
-#define SERVER "www.aviationweather.gov"
-#define BASE_URI "/adds/dataserver_current/httpparam?dataSource=metars&requestType=retrieve&format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&stationString="
+#define SERVER "aviationweather.gov"
+#define BASE_URI "/api/data/metar?format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&ids="
 
 boolean ledStatus = true;   // used so leds only indicate connection status on first boot, or after failure
 int loops = -1;             // "loops" used only to set blink colors for high winds, thunderstorms and/or lightning, if any found
