@@ -16,8 +16,7 @@ CHANGE LIST from Kyle Harmon's Code at https://github.com/WKHarmon/led-sectional
 	 This has two benefits:
 		a) Permits easy setup if moving to a new WiFi network,
 		b) Makes a WiFi connection reliably vs being problematic with some routers that won't connect without forcing 802.11g, e.g.
-           WiFi.setPhyMode(WIFI_PHY_MODE_11G); // from a tip at https://github.com/esp8266/Arduino/issues/8299
-           Good reference: https://randomnerdtutorials.com/wifimanager-with-esp8266-autoconnect-custom-parameter-and-manage-your-ssid-and-password/
+           WiFi.setPhyMode(WIFI_PHY_MODE_11G);
  2. High wind (orange) color will now blink vs being a solid orange, and be shown for all flight categories, not just VFR
  3. Lightning (white blink) will occur not just for TS (thunderstorms), but also for LTG and LTNG reported in <raw_text> in response XML
 
