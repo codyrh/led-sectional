@@ -1,22 +1,24 @@
 # led-sectional
-October 19, 2023
-----------------
-Updated SERVER and BASE_URI to reflect aviationweather.gov changes.
-  
-May 5, 2023
------------
-Fixed wifi connection logic.  Previously was doing an autoconnect every time a loop
-occurred, which is whenever there is lighting or thunderstorms or high winds found.
+January 17, 2024
+ ----------------
+ Added line: WiFi.setPhyMode(WIFI_PHY_MODE_11G); after WiFi.mode(WIFI_STA);
+ This seems to fix a problem with connection failures to SmartWiFi routers that have the same SSID for both 2.4 and 5 ghz bands.
+ Tip was found at https://github.com/esp8266/Arduino/issues/8299
  
-April 27, 2023
-CHANGE LIST from Kyle Harmon's Code at https://github.com/WKHarmon/led-sectional
---------------------------------------------------------------------------------
-1. Added WiFiManger
-   See this reference: https://randomnerdtutorials.com/wifimanager-with-esp8266-autoconnect-custom-parameter-and-manage-your-ssid-and-password/
-	 This has two benefits:
-		a) Permits easy setup if moving to a new WiFi network,
-		b) Makes a WiFi connection reliably vs being problematic with some routers that won't connect without forcing 802.11g, e.g.
-           WiFi.setPhyMode(WIFI_PHY_MODE_11G);
+ October 19, 2023
+ ----------------
+ Updated SERVER and BASE_URI to reflect aviationweather.gov changes.
+  
+ May 5, 2023
+ -----------
+ Fixed wifi connection logic.  Previously was doing an autoconnect every time a loop
+ occurred, which is whenever there is lighting or thunderstorms or high winds found.
+ 
+ April 27, 2023
+ CHANGE LIST from Kyle Harmon's Code at https://github.com/WKHarmon/led-sectional
+ --------------------------------------------------------------------------------
+ 1. Added WiFiManger
+	See this reference: https://randomnerdtutorials.com/wifimanager-with-esp8266-autoconnect-custom-parameter-and-manage-your-ssid-and-password/
  2. High wind (orange) color will now blink vs being a solid orange, and be shown for all flight categories, not just VFR
  3. Lightning (white blink) will occur not just for TS (thunderstorms), but also for LTG and LTNG reported in <raw_text> in response XML
 
