@@ -40,4 +40,4 @@ This uses an Arduino to download METARs for a set of airports and assign a color
 
 This is designed to run on an ESP8266 and deployed using Arduino, but with minor tweaks (e.g. updated libraries) it should run on most Arduino platforms.
 
-Use EXP8266 Core V2.74, and FastLED V3.30
+Use ESP8266 Core V2.74, and FastLED V3.30
