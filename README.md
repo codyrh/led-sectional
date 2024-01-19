@@ -1,4 +1,11 @@
 # led-sectional
+January 19, 2024
+----------------
+Edited to show METAR string in serial output.  Prior code looked like it should have worked, but did not.
+Added a second threshold for very high winds or gusts:
+  1. LEDs will blink black/clear for high winds.
+  2. LEDs will blink orange for very high winds or gusts.
+     
 January 17, 2024
  ----------------
  Added line: WiFi.setPhyMode(WIFI_PHY_MODE_11G); after WiFi.mode(WIFI_STA);
