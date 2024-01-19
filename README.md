@@ -2,9 +2,11 @@
 January 19, 2024
 ----------------
 Edited to show METAR string in serial output.  Prior code looked like it should have worked, but did not.
+
 Added a second threshold for very high winds or gusts:
   1. LEDs will blink black/clear for high winds.
   2. LEDs will blink orange for very high winds or gusts.
+ 
 Edited to show count of LEDs with thunderstorms/lightning, high winds, very high winds.
 
 January 17, 2024
