@@ -3,11 +3,12 @@ January 19, 2024
 ----------------
 Edited to show METAR string in serial output.  Prior code looked like it should have worked, but did not.
 
-Added a second threshold for very high winds or gusts:
-  1. LEDs will blink black/clear for high winds.
+Added a second threshold for very high winds or gusts.
+  1.  Added constant FADE_FOR_HIGH_WINDS to either blink/fade to 50% of flight category color for high winds, or
+      blink black/clear.  Default is true.
   2. LEDs will blink orange for very high winds or gusts.
- 
-Edited to show count of LEDs with thunderstorms/lightning, high winds, very high winds.
+
+Edited to show count of LEDs with thunderstorms/lightning, high winds, very high winds in serial output.
 
 January 17, 2024
  ----------------
