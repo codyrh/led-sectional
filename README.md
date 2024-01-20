@@ -1,4 +1,10 @@
 # led-sectional
+January 20, 2024
+----------------
+Serial output now shows airport code for LEDs with storms/lightning, high winds, or very high winds vs just the LED
+number.
+Changed default LOOP_INTERVAL to 1000 vs 5000.
+
 January 19, 2024
 ----------------
 Edited to show METAR string in serial output.  Prior code looked like it should have worked, but did not.
