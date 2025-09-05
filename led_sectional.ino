@@ -154,8 +154,8 @@ Edited to show count of LEDs with thunderstorms/lightning, high winds, very high
 
 Issues
 ------
-If an airport isn't reporting flight category, but has high winds, lightning or thunderstorms, you get the blink colors but no flight category (blank).
-Better behavior might be to skip that LED?
+RESOLVED: If an airport isn't reporting flight category, but has high winds, lightning or thunderstorms, you get the blink colors but no flight category (blank).
+SOLUTION: Now shows 50% white LED for airports with weather data but no flight category, providing visual indication that the airport is active.
 */
 
 #if defined(ESP32)
@@ -808,7 +808,22 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   else if (compareStringP(condition, IFR_STR)) color = CRGB::Red;
   else if (compareStringP(condition, MVFR_STR)) color = CRGB::Blue;
   else if (compareStringP(condition, VFR_STR)) color = CRGB::Green;
-  else color = CRGB::Black;  // if no flight category was reported
+  else {
+    // If no flight category was reported but airport has weather data (winds, lightning, etc.)
+    // show 50% white to indicate the airport is active but category is unknown
+    bool hasWeatherData = (wind > 0) || (gusts > 0) || 
+                         (wxstring.indexOf(FPSTR(TS_STR)) != -1) || 
+                         (currentRawText.indexOf(FPSTR(LTG_STR)) != -1) || 
+                         (currentRawText.indexOf(FPSTR(LTNG_STR)) != -1);
+    
+    if (hasWeatherData) {
+      color = CRGB::White;
+      color %= 128;  // 50% brightness (128/256)
+      Serial.println(F("... no flight category but has weather data, using 50% white"));
+    } else {
+      color = CRGB::Black;  // No data at all, keep LED off
+    }
+  }
 
   leds[led] = color;
 }
