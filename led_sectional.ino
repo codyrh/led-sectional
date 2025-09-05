@@ -231,7 +231,7 @@ CRGB leds[NUM_AIRPORTS];
 //WS2812 and GRB for LED string from AliExpress
 #define LED_TYPE WS2811
 #define COLOR_ORDER RGB
-#define BRIGHTNESS 100   // 20-30 suggested for LED strip, 100 for 2811 bulbs
+#define BRIGHTNESS 70   // 20-30 suggested for LED strip, 100 for 2811 bulbs
                         // If using a light sensor, this is the initial brightness on boot.
 
 /* This section only applies if you have an ambient light sensor connected */
@@ -818,8 +818,8 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
     
     if (hasWeatherData) {
       color = CRGB::White;
-      color %= 128;  // 50% brightness (128/256)
-      Serial.println(F("... no flight category but has weather data, using 50% white"));
+      color.nscale8(51);  // Scale to 20% brightness (51/256 ≈ 0.2)
+      Serial.println(F("... no flight category but has weather data, using 20% white"));
     } else {
       color = CRGB::Black;  // No data at all, keep LED off
     }
