@@ -17,6 +17,32 @@
 // https://aviationweather.gov/api/data/metar?format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&ids=KTME,KSGR
 
 /*
+September 4, 2025
+----------------
+XML PARSER OPTIMIZATIONS (Added):
+=====================================
+1. State Machine Parser: Replaced string concatenation and multiple endsWith() calls 
+   with a finite state machine for faster parsing and lower memory usage.
+
+2. Structured Data: Created MetarData struct to organize airport data and reduce 
+   variable count from 7 separate strings to 1 structured object.
+
+3. Buffer Management: Eliminated currentLine string that was rebuilt every character.
+   Now uses focused tagBuffer and contentBuffer only when needed.
+
+4. Memory Efficiency: Reduced string operations by ~70% and eliminated redundant 
+   string copying. TagBuffer is reset after each tag, contentBuffer only when needed.
+
+5. Performance Improvements:
+   - Removed expensive endsWith() calls in tight loop
+   - Eliminated per-character string concatenation for currentLine
+   - Reduced memory allocations through buffer reuse
+   - More predictable parsing behavior
+
+Original parsing did ~8 string operations per character.
+Optimized parsing does ~2 string operations per character in tag content.
+
+
 January 24, 2024
 ----------------
 Added support for ESP32-WROOM-DA.  Can now compile for either that board or the ESP8266.
@@ -90,9 +116,9 @@ Better behavior might be to skip that LED?
 
 using namespace std;
 
-#define NUM_AIRPORTS 25          // This is the number of airports in list, including nulls, NOT # LEDs in string.
-#define WIND_THRESHOLD 14        // Winds or gusting winds above this but less than HIGH_WIND_THRESHOLD cause LED to either fade or blink between black/clear and the flight category color
-#define HIGH_WIND_THRESHOLD 19   // Winds or gusting winds above this cause LED to blink orange
+#define NUM_AIRPORTS 30          // This is the number of airports in list, including nulls, NOT # LEDs in string.
+#define WIND_THRESHOLD 15        // Winds or gusting winds above this but less than HIGH_WIND_THRESHOLD cause LED to either fade or blink between black/clear and the flight category color
+#define HIGH_WIND_THRESHOLD 25   // Winds or gusting winds above this cause LED to blink orange
 #define LOOP_INTERVAL 1000       // Interval in ms between brightness updates, and lightning/storm, high wind blinks
 #define DO_LIGHTNING true        // Causes LED to blink white for thunderstorms or lightning
 #define DO_WINDS true            // Causes LED to 1) fade flight category color or blink black/clear for winds > WIND_THRESHOLD, to blink orange for winds > HIGH_WIND_THRESHOLD
@@ -116,9 +142,9 @@ CRGB leds[NUM_AIRPORTS];
                       // I'm using pin D5 (which is GPIO14) on my ESP8266 12-E NodeMCU in April, 2023.  Setting this to 5 works fine.
 
 //WS2812 and GRB for LED string from AliExpress
-#define LED_TYPE WS2812
-#define COLOR_ORDER GRB
-#define BRIGHTNESS 30   // 20-30 suggested for LED strip, 100 for 2811 bulbs
+#define LED_TYPE WS2811
+#define COLOR_ORDER RGB
+#define BRIGHTNESS 100   // 20-30 suggested for LED strip, 100 for 2811 bulbs
                         // If using a light sensor, this is the initial brightness on boot.
 
 /* This section only applies if you have an ambient light sensor connected */
@@ -149,33 +175,13 @@ std::vector<unsigned short int> lightningLeds;
 std::vector<unsigned short int> windLeds;
 std::vector<unsigned short int> highwindLeds;
 
-std::vector<String> airports({
-"KGLS", //1  Note LED # in serial output is 1 less, e.g. first in this list will be LED 0.
-"KT41", //2
-"KEFD", //3 
-"KHOU", //4
-"KLVJ", //5
-"KAXH", //6
-"KSGR", //7
-"NULL", //8
-"KLBX", //9
-"KBYY", //10
-"KARM", //11
-"KELA", //12
-"KTME", //13
-"KDWH", //14
-"KIAH", //15
-"NULL", //16
-"KT78", //17
-"K6R3", //18
-"KCXO", //19
-"KUTS", //20
-"NULL", //21
-"KCFD", //22
-"KCLL", //23
-"K60R", //24
-"K11R"  //25
-});
+//Home & ASA
+// First 5 entries (indices 0-4) are the legend: VFR, MVFR, IFR, LIFR, WVFR
+// These will be set to fixed colors and never updated with weather data
+std::vector<String> airports({ "VFR", "MVFR", "IFR", "LIFR", "WVFR", "KUIL", "NULL", "KHQM", "NULL", "KSHN", "KOLM", "KGRF", "KPLU", "KTCM", "KTIW", "KPWT", "KSEA", "KRNT", "KBFI", "KPAE", "KAWO", "K0S9", "KNUW", "KBVS", "KBLI", "KORS", "KFHR", "CYYJ", "NULL", "KCLM" });
+
+//Mark L - 29 LEDs
+//std::vector<String> airports({"VFR", "MVFR", "IFR", "LIFR", "WVFR", "KUIL", "NULL", "KHQM", "NULL", "KSHN", "KOLM", "KGRF", "KPLU", "KTCM", "KTIW", "KSEA", "KRNT", "KBFI", "KPWT", "KPAE", "K0S9", "KAWO", "KNUW", "KBVS", "KBLI", "KORS", "KFHR", "CYYJ", "KCLM"});
 
 #define DEBUG false
 
@@ -214,6 +220,14 @@ void setup() {
   // Initialize LEDs
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_AIRPORTS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
+
+  // Set legend colors for first 5 LEDs (indices 0-4) and keep them fixed
+  leds[0] = CRGB::Green;   // VFR
+  leds[1] = CRGB::Blue;    // MVFR
+  leds[2] = CRGB::Red;     // IFR
+  leds[3] = CRGB::Magenta; // LIFR
+  leds[4] = CRGB::Yellow;  // WVFR
+  FastLED.show();
 
   WiFi.mode(WIFI_STA);
 #if defined(ESP32)
@@ -279,18 +293,31 @@ void loop() {
 
   // Connect to WiFi
   if (!isWiFiConnected) {
-    if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Orange); // indicate status with LEDs, but only on first run or error
+    if (ledStatus) {
+      // Set status to orange, but preserve legend colors (first 5 LEDs)
+      for (int i = 5; i < NUM_AIRPORTS; i++) {
+        leds[i] = CRGB::Orange;
+      }
+    }
     FastLED.show();
     isWiFiConnected = wm.autoConnect();
     if (isWiFiConnected) {
       Serial.println("Connected to local network");
-      if (ledStatus) fill_solid(leds, NUM_AIRPORTS, CRGB::Purple);  //set to purple while retrieving data
+      if (ledStatus) {
+        // Set to purple while retrieving data, but preserve legend colors (first 5 LEDs)
+        for (int i = 5; i < NUM_AIRPORTS; i++) {
+          leds[i] = CRGB::Purple;
+        }
+      }
       FastLED.show();
       ledStatus = false;
     }
     else {
       Serial.println("Failed to connect to local network or hit timeout");
-      fill_solid(leds, NUM_AIRPORTS, CRGB::Orange);
+      // Set status to orange, but preserve legend colors (first 5 LEDs)
+      for (int i = 5; i < NUM_AIRPORTS; i++) {
+        leds[i] = CRGB::Orange;
+      }
       FastLED.show();
       ledStatus = true;
       wm.autoConnect("AutoConnectAP");  // should popup signin else goto 192.168.4.1 after connecting to AutoConnectAP or ESPxxxx
@@ -405,34 +432,67 @@ void loop() {
   }
 }
 
+
+
+// Optimized XML parser states
+enum XmlParserState {
+  PARSER_IDLE,
+  PARSER_IN_RAW_TEXT,
+  PARSER_IN_STATION_ID,
+  PARSER_IN_FLIGHT_CATEGORY,
+  PARSER_IN_WIND_SPEED,
+  PARSER_IN_WIND_GUST,
+  PARSER_IN_WX_STRING
+};
+
+// Structure to hold METAR data for one airport
+struct MetarData {
+  String airport = "";
+  String condition = "";
+  String wind = "";
+  String gusts = "";
+  String wxstring = "";
+  String rawText = "";
+  
+  void reset() {
+    airport = "";
+    condition = "";
+    wind = "";
+    gusts = "";
+    wxstring = "";
+    rawText = "";
+  }
+};
+
 bool getMetars(){
   lightningLeds.clear(); // clear out existing lightning LEDs since they're global
   windLeds.clear();
   highwindLeds.clear();
-  fill_solid(leds, NUM_AIRPORTS, CRGB::Black); // Set everything to black just in case there is no report
+  // Set weather airport LEDs to black, but preserve legend colors (first 5 LEDs)
+  for (int i = 5; i < NUM_AIRPORTS; i++) {
+    leds[i] = CRGB::Black;
+  }
   uint32_t t;
   char c;
-  boolean readingRawText = false;
-  boolean readingAirport = false;
-  boolean readingCondition = false;
-  boolean readingWind = false;
-  boolean readingGusts = false;
-  boolean readingWxstring = false;
+  
+  // Optimized parser variables
+  XmlParserState parserState = PARSER_IDLE;
+  String tagBuffer;
+  String contentBuffer;
+  bool inTag = false;
+  
+  // Pre-allocate buffers to avoid fragmentation
+  tagBuffer.reserve(32);      // Longest tag is ~15 chars
+  contentBuffer.reserve(256); // METAR raw text can be long
   
   std::vector<unsigned short int> led;
-  String currentRawText = "";
-  String currentAirport = "";
-  String currentCondition = "";
-  String currentLine = "";
-  String currentWind = "";
-  String currentGusts = "";
-  String currentWxstring = "";
+  MetarData currentMetar;
   String airportString = "";
   bool firstAirport = true;
   
   // Build comma-separated list of airport IDs from airport string vector (list) to send to www.aviationweather.gov
   for (int i = 0; i < NUM_AIRPORTS; i++) {
-    if (airports[i] != "NULL" && airports[i] != "VFR" && airports[i] != "MVFR" && airports[i] != "IFR" && airports[i] != "LIFR") {
+    if (airports[i] != "NULL" && airports[i] != "VFR" && airports[i] != "MVFR" && airports[i] != "IFR" && airports[i] != "LIFR" && airports[i] != "WVFR") {
       if (firstAirport) {
         firstAirport = false;
         airportString = airports[i];
@@ -470,7 +530,10 @@ bool getMetars(){
     client.println();
     client.flush();
     t = millis(); // start time
-    FastLED.clear();
+    // Clear only weather LEDs, preserve legend colors (first 5 LEDs)
+    for (int i = 5; i < NUM_AIRPORTS; i++) {
+      leds[i] = CRGB::Black;
+    }
 
     Serial.print("Getting data");
 
@@ -489,75 +552,88 @@ bool getMetars(){
     while (client.connected()) {
       if ((c = client.read()) >= 0) {
         yield(); // Otherwise the WiFi stack can crash
-        currentLine += c;
-        if (c == '\n') currentLine = "";
-        if (currentLine.endsWith("<raw_text>")) { // start paying attention
-             if (!led.empty()) {                  // we assume we are recording results at each change in airport
-               for (vector<unsigned short int>::iterator it = led.begin(); it != led.end(); ++it)  {
-                 doColor(currentAirport, *it, currentWind.toInt(), currentGusts.toInt(), currentCondition, currentWxstring, currentRawText);
-               }
-             led.clear();
-             }
-          currentRawText = "";
-          currentAirport = "";                    // Reset everything when the airport changes
-          readingRawText = true;
-          currentCondition = "";
-          currentWind = "";
-          currentGusts = "";
-          currentWxstring = "";
-        } else if (readingRawText)  {
-            if (!currentLine.endsWith("<"))
-              currentRawText += c;
-            else
-              readingRawText = false;
-         } else if (currentLine.endsWith("<station_id>")) { 
-          readingAirport = true;
-        } else if (readingAirport) {
-            if (!currentLine.endsWith("<"))
-              currentAirport += c;
-            else {
-              readingAirport = false;
-              for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
-                if (airports[i] == currentAirport)
-                  led.push_back(i);
-              }
+        
+        // Optimized XML parser using state machine
+        if (c == '<') {
+          inTag = true;
+          tagBuffer = "";
+          
+          // Process accumulated content when we hit a closing tag
+          if (parserState != PARSER_IDLE && !contentBuffer.isEmpty()) {
+            switch (parserState) {
+              case PARSER_IN_RAW_TEXT:
+                currentMetar.rawText = contentBuffer;
+                break;
+              case PARSER_IN_STATION_ID:
+                currentMetar.airport = contentBuffer;
+                // Find matching LED positions for this airport
+                led.clear();
+                for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
+                  if (airports[i] == currentMetar.airport) {
+                    led.push_back(i);
+                  }
+                }
+                break;
+              case PARSER_IN_FLIGHT_CATEGORY:
+                currentMetar.condition = contentBuffer;
+                break;
+              case PARSER_IN_WIND_SPEED:
+                currentMetar.wind = contentBuffer;
+                break;
+              case PARSER_IN_WIND_GUST:
+                currentMetar.gusts = contentBuffer;
+                break;
+              case PARSER_IN_WX_STRING:
+                currentMetar.wxstring = contentBuffer;
+                break;
             }
-        } else if (currentLine.endsWith("<wind_speed_kt>")) {
-          readingWind = true;
-        } else if (readingWind) {
-          if (!currentLine.endsWith("<")) {
-            currentWind += c;
-          } else {
-            readingWind = false;
+            contentBuffer = "";
           }
-        } else if (currentLine.endsWith("<wind_gust_kt>")) {
-          readingGusts = true;
-        } else if (readingGusts) {
-          if (!currentLine.endsWith("<")) {
-            currentGusts += c;
-          } else {
-            readingGusts = false;
+        } else if (c == '>') {
+          inTag = false;
+          
+          // Determine new parser state based on tag (optimized with early returns)
+          if (tagBuffer == "raw_text") {
+            // Process previous airport data if we have any
+            if (!led.empty() && !currentMetar.airport.isEmpty()) {
+              for (auto it = led.begin(); it != led.end(); ++it) {
+                doColor(currentMetar.airport, *it, currentMetar.wind.toInt(), 
+                       currentMetar.gusts.toInt(), currentMetar.condition, 
+                       currentMetar.wxstring, currentMetar.rawText);
+              }
+              led.clear();
+            }
+            currentMetar.reset();
+            parserState = PARSER_IN_RAW_TEXT;
+          } else if (tagBuffer == "station_id") {
+            parserState = PARSER_IN_STATION_ID;
+          } else if (tagBuffer == "flight_category") {
+            parserState = PARSER_IN_FLIGHT_CATEGORY;
+          } else if (tagBuffer == "wind_speed_kt") {
+            parserState = PARSER_IN_WIND_SPEED;
+          } else if (tagBuffer == "wind_gust_kt") {
+            parserState = PARSER_IN_WIND_GUST;
+          } else if (tagBuffer == "wx_string") {
+            parserState = PARSER_IN_WX_STRING;
+          } else if (tagBuffer.charAt(0) == '/') {
+            // Closing tag - reset state to idle (optimized check)
+            parserState = PARSER_IDLE;
           }
-        } else if (currentLine.endsWith("<flight_category>")) {
-          readingCondition = true;
-        } else if (readingCondition) {
-          if (!currentLine.endsWith("<")) {
-            currentCondition += c;
-          } else {
-            readingCondition = false;
-          }
-        } else if (currentLine.endsWith("<wx_string>")) {
-          readingWxstring = true;
-        } else if (readingWxstring) {
-          if (!currentLine.endsWith("<"))
-            currentWxstring += c;
-          else
-            readingWxstring = false;
+          tagBuffer = "";
+        } else if (inTag) {
+          tagBuffer += c;
+        } else if (parserState != PARSER_IDLE) {
+          // Accumulate content for the current element
+          contentBuffer += c;
         }
+        
         t = millis(); // Reset timeout clock
       } else if ((millis() - t) >= (READ_TIMEOUT * 1000)) {
         Serial.println("---Timeout---");
-        fill_solid(leds, NUM_AIRPORTS, CRGB::Cyan); // indicate status with LEDs
+        // Set status to cyan, but preserve legend colors (first 5 LEDs)
+        for (int i = 5; i < NUM_AIRPORTS; i++) {
+          leds[i] = CRGB::Cyan;
+        }
         FastLED.show();
         ledStatus = true;
         client.stop();
@@ -565,26 +641,26 @@ bool getMetars(){
       }
     }
   }
-  // need to doColor this for the last airport
-  for (vector<unsigned short int>::iterator it = led.begin(); it != led.end(); ++it) {
-    doColor(currentAirport, *it, currentWind.toInt(), currentGusts.toInt(), currentCondition, currentWxstring, currentRawText);
+  // Process the last airport data if we have any
+  if (!led.empty() && !currentMetar.airport.isEmpty()) {
+    for (auto it = led.begin(); it != led.end(); ++it) {
+      doColor(currentMetar.airport, *it, currentMetar.wind.toInt(), 
+             currentMetar.gusts.toInt(), currentMetar.condition, 
+             currentMetar.wxstring, currentMetar.rawText);
+    }
   }
   led.clear();
-
-  // Do the key LEDs now if they exist
-  for (int i = 0; i < (NUM_AIRPORTS); i++) {
-    // Use this opportunity to set colors for LEDs in our key
-    if (airports[i] == "VFR") leds[i] = CRGB::Green;
-    else if (airports[i] == "MVFR") leds[i] = CRGB::Blue;
-    else if (airports[i] == "IFR") leds[i] = CRGB::Red;
-    else if (airports[i] == "LIFR") leds[i] = CRGB::Magenta;
-  }
 
   client.stop();
   return true;
 }
 
 void doColor(String identifier, unsigned short int led, int wind, int gusts, String condition, String wxstring, String currentRawText) {
+  // Skip updating the legend LEDs (first 5 LEDs, indices 0-4)
+  if (led < 5) {
+    return;
+  }
+  
   CRGB color;
   Serial.print(identifier);
   Serial.print(": ");
@@ -614,10 +690,10 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
       windLeds.push_back(led);
   }
 
-  if (condition == "LIFR" || identifier == "LIFR") color = CRGB::Magenta;
+  if (condition == "LIFR") color = CRGB::Magenta;
   else if (condition == "IFR") color = CRGB::Red;
   else if (condition == "MVFR") color = CRGB::Blue;
-  else if (condition == "VFR")color = CRGB::Green;
+  else if (condition == "VFR") color = CRGB::Green;
   else color = CRGB::Black;  // if no flight category was reported
 
   leds[led] = color;
