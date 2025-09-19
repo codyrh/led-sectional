@@ -1,5 +1,5 @@
 // Use ESP8266 Core V2.74 OR esp32 2.0.11 by Espressif
-// Use FastLED V3.30, WiFiManager 2.0.15-rc.1
+// Use FastLED V3.30, WiFiManager 2.0.15-rc.1, ArduinoJson 6.21.3
 // Also installed are Arduino Uno WiFi Dev Ed Library 0.0.3, Adafruit TSL2561 1.1.0
 
 // Boards supported are:
@@ -12,9 +12,9 @@
 
 // In my experience, a level shifter is needed for the data signal for the LEDs.
 
-// To get a look at the XML output directly from a browser, edit the end of next line for an airport or airport list.
+// To get a look at the JSON output directly from a browser, edit the end of next line for an airport or airport list.
 // It's not identical to what the code receives, but can be helpful.
-// https://aviationweather.gov/api/data/metar?format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&ids=KTME,KSGR
+// https://aviationweather.gov/api/data/metar?format=json&hoursBeforeNow=3&mostRecentForEachStation=true&ids=KTME,KSGR
 
 /*
 September 4, 2025
@@ -76,28 +76,25 @@ Memory Savings Summary:
 - More predictable memory usage patterns
 - Better monitoring of memory health
 
-XML PARSER OPTIMIZATIONS (Added):
+JSON PARSER OPTIMIZATIONS (Added):
 =====================================
-1. State Machine Parser: Replaced string concatenation and multiple endsWith() calls 
-   with a finite state machine for faster parsing and lower memory usage.
+1. ArduinoJson Library: Replaced complex XML state machine with efficient JSON 
+   parsing using the ArduinoJson library for better performance and reliability.
 
-2. Structured Data: Created MetarData struct to organize airport data and reduce 
-   variable count from 7 separate strings to 1 structured object.
+2. Structured Data: Updated MetarData struct to match JSON field names (icaoId, 
+   fltCat, wspd, wxString, rawOb) for cleaner data handling.
 
-3. Buffer Management: Eliminated currentLine string that was rebuilt every character.
-   Now uses focused tagBuffer and contentBuffer only when needed.
+3. Memory Efficiency: JSON parsing is more memory-efficient than XML, requiring 
+   less string manipulation and providing direct access to typed data.
 
-4. Memory Efficiency: Reduced string operations by ~70% and eliminated redundant 
-   string copying. TagBuffer is reset after each tag, contentBuffer only when needed.
+4. Performance Improvements:
+   - Eliminated complex XML state machine and character-by-character parsing
+   - Direct access to JSON fields without string searching
+   - Reduced memory allocations through proper JSON document sizing
+   - More reliable parsing with built-in error handling
 
-5. Performance Improvements:
-   - Removed expensive endsWith() calls in tight loop
-   - Eliminated per-character string concatenation for currentLine
-   - Reduced memory allocations through buffer reuse
-   - More predictable parsing behavior
-
-Original parsing did ~8 string operations per character.
-Optimized parsing does ~2 string operations per character in tag content.
+5. API Format Change: Updated from XML format to JSON format for the aviation 
+   weather API, providing cleaner data structure and faster processing.
 
 
 January 24, 2024
@@ -169,6 +166,7 @@ SOLUTION: Now shows 50% white LED for airports with weather data but no flight c
 
 #include <WiFiManager.h>      // https://github.com/tzapu/WiFiManager
 #include <FastLED.h>
+#include <ArduinoJson.h>      // https://github.com/bblanchon/ArduinoJson
 #include <vector>
 
 using namespace std;
@@ -184,17 +182,11 @@ const char TS_STR[] PROGMEM = "TS";
 const char LTG_STR[] PROGMEM = "LTG";
 const char LTNG_STR[] PROGMEM = "LTNG";
 
-// XML tag strings in PROGMEM
-const char TAG_RAW_TEXT[] PROGMEM = "raw_text";
-const char TAG_STATION_ID[] PROGMEM = "station_id";
-const char TAG_FLIGHT_CATEGORY[] PROGMEM = "flight_category";
-const char TAG_WIND_SPEED[] PROGMEM = "wind_speed_kt";
-const char TAG_WIND_GUST[] PROGMEM = "wind_gust_kt";
-const char TAG_WX_STRING[] PROGMEM = "wx_string";
+// XML tag strings no longer needed for JSON parsing
 
 // Server strings in PROGMEM
 const char SERVER_STR[] PROGMEM = "aviationweather.gov";
-const char BASE_URI_STR[] PROGMEM = "/api/data/metar?format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&ids=";
+const char BASE_URI_STR[] PROGMEM = "/api/data/metar?format=json&hoursBeforeNow=3&mostRecentForEachStation=true&ids=";
 const char USER_AGENT_STR[] PROGMEM = "LED Sectional Client";
 
 // Helper function to compare strings from PROGMEM
@@ -524,43 +516,34 @@ void loop() {
 
 
 
-// Optimized XML parser states
-enum XmlParserState {
-  PARSER_IDLE,
-  PARSER_IN_RAW_TEXT,
-  PARSER_IN_STATION_ID,
-  PARSER_IN_FLIGHT_CATEGORY,
-  PARSER_IN_WIND_SPEED,
-  PARSER_IN_WIND_GUST,
-  PARSER_IN_WX_STRING
-};
+// JSON parser no longer needs state machine - ArduinoJson handles parsing
 
 // Structure to hold METAR data for one airport - optimized for memory
 struct MetarData {
-  String airport;
-  String condition;
-  String wind;
-  String gusts;
-  String wxstring;
-  String rawText;
+  String icaoId;      // Airport ICAO identifier (was airport)
+  String fltCat;      // Flight category (was condition)
+  int wspd;           // Wind speed (was wind string)
+  int wgst;           // Wind gust speed (was gusts string)
+  String wxString;    // Weather string (was wxstring)
+  String rawOb;       // Raw METAR observation (was rawText)
   
   // Constructor with reservations to prevent fragmentation
   MetarData() {
-    airport.reserve(8);      // Airport codes are typically 4-6 chars
-    condition.reserve(8);    // VFR, MVFR, IFR, LIFR
-    wind.reserve(4);         // Wind speed numbers
-    gusts.reserve(4);        // Gust speed numbers
-    wxstring.reserve(32);    // Weather string
-    rawText.reserve(256);    // METAR raw text can be long
+    icaoId.reserve(8);      // Airport codes are typically 4-6 chars
+    fltCat.reserve(8);      // VFR, MVFR, IFR, LIFR
+    wxString.reserve(32);   // Weather string
+    rawOb.reserve(256);     // METAR raw text can be long
+    wspd = 0;
+    wgst = 0;
   }
   
   void reset() {
-    airport = "";
-    condition = "";
-    wind = "";
-    gusts = "";
-    wxstring = "";
-    rawText = "";
+    icaoId = "";
+    fltCat = "";
+    wspd = 0;
+    wgst = 0;
+    wxString = "";
+    rawOb = "";
   }
 };
 
@@ -577,25 +560,8 @@ bool getMetars(){
   windLeds.reserve(NUM_AIRPORTS / 4);       // Estimate max 25% might have high winds
   highwindLeds.reserve(NUM_AIRPORTS / 8);   // Estimate max 12% might have very high winds
   
-  // Set weather airport LEDs to black, but preserve legend colors (first 5 LEDs)
-  setStatusLEDs(CRGB::Black);
   uint32_t t;
-  char c;
   
-  // Optimized parser variables with proper reservations
-  XmlParserState parserState = PARSER_IDLE;
-  String tagBuffer;
-  String contentBuffer;
-  bool inTag = false;
-  
-  // Pre-allocate buffers to avoid fragmentation - more conservative sizes
-  tagBuffer.reserve(20);      // Longest tag is ~15 chars + margin
-  contentBuffer.reserve(200); // METAR raw text, reduced from 256
-  
-  std::vector<unsigned short int> led;
-  led.reserve(8); // Most airports appear only once, some twice
-  
-  MetarData currentMetar; // Uses optimized constructor
   String airportString;
   airportString.reserve(300); // Estimate for airport list string
   bool firstAirport = true;
@@ -645,8 +611,6 @@ bool getMetars(){
     client.println();
     client.flush();
     t = millis(); // start time
-    // Clear only weather LEDs, preserve legend colors (first 5 LEDs)
-    setStatusLEDs(CRGB::Black);
 
     Serial.print(F("Getting data"));
 
@@ -662,107 +626,188 @@ bool getMetars(){
 
     Serial.println();
 
-    while (client.connected()) {
-      if ((c = client.read()) >= 0) {
-        yield(); // Otherwise the WiFi stack can crash
-        
-        // Optimized XML parser using state machine
-        if (c == '<') {
-          inTag = true;
-          tagBuffer = "";
-          
-          // Process accumulated content when we hit a closing tag
-          if (parserState != PARSER_IDLE && !contentBuffer.isEmpty()) {
-            switch (parserState) {
-              case PARSER_IN_RAW_TEXT:
-                currentMetar.rawText = contentBuffer;
-                break;
-              case PARSER_IN_STATION_ID:
-                currentMetar.airport = contentBuffer;
-                // Find matching LED positions for this airport (optimized search)
-                led.clear();
-                // Since most airports appear only once or twice, we can optimize
-                for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
-                  if (airports[i] == currentMetar.airport) {
-                    led.push_back(i);
-                    // Continue searching as some airports may appear multiple times
-                  }
-                }
-                break;
-              case PARSER_IN_FLIGHT_CATEGORY:
-                currentMetar.condition = contentBuffer;
-                break;
-              case PARSER_IN_WIND_SPEED:
-                currentMetar.wind = contentBuffer;
-                break;
-              case PARSER_IN_WIND_GUST:
-                currentMetar.gusts = contentBuffer;
-                break;
-              case PARSER_IN_WX_STRING:
-                currentMetar.wxstring = contentBuffer;
-                break;
-            }
-            contentBuffer = "";
+    // Skip HTTP headers to find JSON content
+    bool foundJson = false;
+    String line = "";
+    line.reserve(100); // Reserve space for header lines
+    
+    while (client.connected() && !foundJson) {
+      if (client.available()) {
+        char c = client.read();
+        if (c == '\n') {
+          // Check if this is an empty line (just \r\n) indicating end of headers
+          if (line.length() == 0 || (line.length() == 1 && line.charAt(0) == '\r')) {
+            foundJson = true;
+            Serial.println(F("Found end of HTTP headers, JSON content follows"));
+          } else {
+            Serial.print(F("Header: "));
+            Serial.println(line);
           }
-        } else if (c == '>') {
-          inTag = false;
-          
-          // Determine new parser state based on tag (optimized with early returns)
-          if (compareStringP(tagBuffer, TAG_RAW_TEXT)) {
-            // Process previous airport data if we have any
-            if (!led.empty() && !currentMetar.airport.isEmpty()) {
-              for (auto it = led.begin(); it != led.end(); ++it) {
-                doColor(currentMetar.airport, *it, currentMetar.wind.toInt(), 
-                       currentMetar.gusts.toInt(), currentMetar.condition, 
-                       currentMetar.wxstring, currentMetar.rawText);
-              }
-              led.clear();
-            }
-            currentMetar.reset();
-            parserState = PARSER_IN_RAW_TEXT;
-          } else if (compareStringP(tagBuffer, TAG_STATION_ID)) {
-            parserState = PARSER_IN_STATION_ID;
-          } else if (compareStringP(tagBuffer, TAG_FLIGHT_CATEGORY)) {
-            parserState = PARSER_IN_FLIGHT_CATEGORY;
-          } else if (compareStringP(tagBuffer, TAG_WIND_SPEED)) {
-            parserState = PARSER_IN_WIND_SPEED;
-          } else if (compareStringP(tagBuffer, TAG_WIND_GUST)) {
-            parserState = PARSER_IN_WIND_GUST;
-          } else if (compareStringP(tagBuffer, TAG_WX_STRING)) {
-            parserState = PARSER_IN_WX_STRING;
-          } else if (tagBuffer.charAt(0) == '/') {
-            // Closing tag - reset state to idle (optimized check)
-            parserState = PARSER_IDLE;
-          }
-          tagBuffer = "";
-        } else if (inTag) {
-          tagBuffer += c;
-        } else if (parserState != PARSER_IDLE) {
-          // Accumulate content for the current element
-          contentBuffer += c;
+          line = "";
+        } else if (c != '\r') {
+          line += c;
         }
-        
-        t = millis(); // Reset timeout clock
+        t = millis(); // Reset timeout
       } else if ((millis() - t) >= (READ_TIMEOUT * 1000)) {
-        Serial.println(F("---Timeout---"));
-        setStatusLEDs(CRGB::Cyan);
-        ledStatus = true;
+        Serial.println(F("---Timeout waiting for headers---"));
         client.stop();
         return false;
       }
     }
-  }
-  // Process the last airport data if we have any
-  if (!led.empty() && !currentMetar.airport.isEmpty()) {
-    for (auto it = led.begin(); it != led.end(); ++it) {
-      doColor(currentMetar.airport, *it, currentMetar.wind.toInt(), 
-             currentMetar.gusts.toInt(), currentMetar.condition, 
-             currentMetar.wxstring, currentMetar.rawText);
-    }
-  }
-  led.clear();
 
-  client.stop();
+    if (!foundJson) {
+      Serial.println(F("Could not find JSON content"));
+      client.stop();
+      return false;
+    }
+
+    // Read JSON response into string
+    String jsonResponse = "";
+    jsonResponse.reserve(16384); // Reserve more space for JSON (your response is ~14KB)
+    
+    Serial.println(F("Reading JSON response..."));
+    int charCount = 0;
+    
+    while (client.connected() || client.available()) {
+      if (client.available()) {
+        char c = client.read();
+        jsonResponse += c;
+        charCount++;
+        
+        // Print progress every 1000 characters
+        if (charCount % 1000 == 0) {
+          Serial.print(F("Read "));
+          Serial.print(charCount);
+          Serial.println(F(" characters"));
+        }
+        
+        t = millis(); // Reset timeout
+      } else if ((millis() - t) >= (READ_TIMEOUT * 1000)) {
+        Serial.println(F("---Timeout reading JSON---"));
+        break;
+      }
+    }
+    
+    client.stop();
+    
+    if (jsonResponse.length() == 0) {
+      Serial.println(F("No JSON data received"));
+      return false;
+    }
+
+    Serial.print(F("JSON Response length: "));
+    Serial.println(jsonResponse.length());
+    
+    // Print first 200 characters of JSON for debugging
+    if (jsonResponse.length() > 0) {
+      Serial.println(F("JSON Preview (first 200 chars):"));
+      Serial.println(jsonResponse.substring(0, min(200, (int)jsonResponse.length())));
+    }
+
+    // Parse JSON using ArduinoJson
+    // Calculate needed capacity based on your actual response size
+    const size_t capacity = JSON_ARRAY_SIZE(30) + 30 * JSON_OBJECT_SIZE(30) + jsonResponse.length() + 1000;
+    DynamicJsonDocument doc(capacity);
+
+    Serial.print(F("Allocated JSON document capacity: "));
+    Serial.println(capacity);
+
+    DeserializationError error = deserializeJson(doc, jsonResponse);
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.c_str());
+      Serial.print(F("Error code: "));
+      Serial.println((int)error.code());
+      return false;
+    }
+    
+    Serial.println(F("JSON parsing successful!"));
+
+    // Initialize weather LEDs to black before processing new data (preserve legend LEDs 0-4)
+    for (int i = 5; i < NUM_AIRPORTS; i++) {
+      leds[i] = CRGB::Black;
+    }
+    
+    // Process each airport in the JSON array
+    JsonArray array = doc.as<JsonArray>();
+    Serial.print(F("Processing "));
+    Serial.print(array.size());
+    Serial.println(F(" airports from JSON"));
+    
+    int processedAirports = 0;
+    
+    for (JsonObject airport : array) {
+      MetarData currentMetar;
+      
+      // Extract data from JSON object with null checking
+      currentMetar.icaoId = airport["icaoId"].as<String>();
+      currentMetar.fltCat = airport["fltCat"] | "";  // Handle missing flight category
+      currentMetar.wspd = airport["wspd"] | 0;  // Default to 0 if missing
+      
+      // Wind gusts are not in JSON - parse from rawOb METAR string if present
+      currentMetar.wgst = 0;
+      currentMetar.rawOb = airport["rawOb"].as<String>();
+      
+      // Parse wind gusts from METAR string (format like "35003G15KT" where G15 is gust)
+      if (currentMetar.rawOb.length() > 0) {
+        int gustIndex = currentMetar.rawOb.indexOf('G');
+        if (gustIndex > 0 && gustIndex < currentMetar.rawOb.length() - 3) {
+          // Look for "G" followed by 2-3 digits and "KT"
+          String gustStr = "";
+          for (int i = gustIndex + 1; i < currentMetar.rawOb.length() && isDigit(currentMetar.rawOb.charAt(i)); i++) {
+            gustStr += currentMetar.rawOb.charAt(i);
+          }
+          if (gustStr.length() > 0) {
+            currentMetar.wgst = gustStr.toInt();
+          }
+        }
+      }
+      
+      currentMetar.wxString = airport["wxString"] | "";  // Handle missing weather string
+      
+      // Debug output for first few airports
+      if (processedAirports < 3) {
+        Serial.print(F("Airport "));
+        Serial.print(processedAirports + 1);
+        Serial.print(F(": "));
+        Serial.print(currentMetar.icaoId);
+        Serial.print(F(", Category: "));
+        Serial.print(currentMetar.fltCat);
+        Serial.print(F(", Wind: "));
+        Serial.print(currentMetar.wspd);
+        Serial.print(F("G"));
+        Serial.print(currentMetar.wgst);
+        Serial.print(F("kts, WX: "));
+        Serial.println(currentMetar.wxString);
+      }
+      
+      // Find matching LED positions for this airport
+      std::vector<unsigned short int> led;
+      led.reserve(8); // Most airports appear only once, some twice
+      
+      for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
+        if (airports[i] == currentMetar.icaoId) {
+          led.push_back(i);
+          // Continue searching as some airports may appear multiple times
+        }
+      }
+      
+      // Process this airport's data
+      if (!led.empty()) {
+        for (auto it = led.begin(); it != led.end(); ++it) {
+          doColor(currentMetar.icaoId, *it, currentMetar.wspd, 
+                 currentMetar.wgst, currentMetar.fltCat, 
+                 currentMetar.wxString, currentMetar.rawOb);
+        }
+      }
+      
+      processedAirports++;
+    }
+    
+    Serial.print(F("Processed "));
+    Serial.print(processedAirports);
+    Serial.println(F(" airports total"));
+  }
   
   // Print memory info after processing
   printMemoryInfo();
@@ -788,7 +833,7 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   Serial.print(" WX: ");
   Serial.println(currentRawText);
   
-  // LTG or LTNG for lightning is in raw_text of METAR, not in any other XML field.
+  // LTG or LTNG for lightning is in rawOb of METAR, not in any other JSON field.
   // We'll blink white for either or both of lightning and thunderstorms.
   if ((wxstring.indexOf(FPSTR(TS_STR)) != -1) || (currentRawText.indexOf(FPSTR(LTG_STR)) != -1) || (currentRawText.indexOf(FPSTR(LTNG_STR)) != -1)) {
     Serial.println(F("... found thunderstorms or lightning!"));
@@ -817,7 +862,7 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
                          (currentRawText.indexOf(FPSTR(LTNG_STR)) != -1);
     
     if (hasWeatherData) {
-      color = CRGB::White;
+      color = CRGB::Gray;
       color.nscale8(51);  // Scale to 20% brightness (51/256 ≈ 0.2)
       Serial.println(F("... no flight category but has weather data, using 20% white"));
     } else {
