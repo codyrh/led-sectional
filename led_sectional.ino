@@ -17,15 +17,17 @@
 // To configure for different boards, scroll down to the "BOARD CONFIGURATIONS" section
 // and uncomment ONLY ONE of the configuration lines:
 // 
-//   #define BOARD_CONFIG_HOME_ASA    // Home & ASA - 30 LEDs, WS2811, RGB, Brightness 70
-//   #define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs, WS2812B, GRB, Brightness 50  
-//   #define BOARD_CONFIG_CUSTOM      // Custom - 25 LEDs, WS2812B, GRB, Brightness 60
+//   #define BOARD_CONFIG_ASA         // ASA - 34 LEDs, WS2811, RGB, Brightness 70, High Wind Threshold 25
+//   #define BOARD_CONFIG_HOME        // Home - 30 LEDs, WS2811, RGB, Brightness 70, High Wind Threshold 25
+//   #define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs, WS2812B, GRB, Brightness 50, High Wind Threshold 25
+//   #define BOARD_CONFIG_CUSTOM      // Custom - 25 LEDs, WS2812B, GRB, Brightness 60, High Wind Threshold 25
 //
 // Each configuration includes:
 //   - NUM_AIRPORTS (number of LEDs)
 //   - LED_TYPE (WS2811, WS2812B, etc.)  
 //   - COLOR_ORDER (RGB, GRB, etc.)
 //   - BRIGHTNESS (0-255)
+//   - HIGH_WIND_THRESHOLD (wind speed threshold for orange blinking)
 //   - airports array (list of airport codes)
 //
 // The configuration will be displayed in the Serial Monitor at startup.
@@ -227,6 +229,7 @@ struct BoardConfig {
   int ledType;
   int colorOrder;
   int brightness;
+  int highWindThreshold;
   std::vector<String> airports;
 };
 
@@ -236,6 +239,7 @@ struct BoardConfig {
   #define LED_TYPE WS2811
   #define COLOR_ORDER RGB
   #define BRIGHTNESS 70
+  #define HIGH_WIND_THRESHOLD 20   // Winds or gusting winds above this cause LED to blink orange
   // Airport list defined below in airports vector
 #endif
 
@@ -244,6 +248,7 @@ struct BoardConfig {
   #define LED_TYPE WS2811
   #define COLOR_ORDER RGB
   #define BRIGHTNESS 70
+  #define HIGH_WIND_THRESHOLD 25   // Winds or gusting winds above this cause LED to blink orange
   // Airport list defined below in airports vector
 #endif
 
@@ -253,6 +258,7 @@ struct BoardConfig {
   #define LED_TYPE WS2812B
   #define COLOR_ORDER GRB
   #define BRIGHTNESS 50
+  #define HIGH_WIND_THRESHOLD 20   // Winds or gusting winds above this cause LED to blink orange
   // Airport list defined below in airports vector
 #endif
 
@@ -262,6 +268,7 @@ struct BoardConfig {
   #define LED_TYPE WS2812B         // Customize this
   #define COLOR_ORDER GRB          // Customize this  
   #define BRIGHTNESS 60            // Customize this
+  #define HIGH_WIND_THRESHOLD 25   // Customize this - Winds or gusting winds above this cause LED to blink orange
   // Airport list defined below in airports vector
 #endif
 
@@ -272,7 +279,6 @@ struct BoardConfig {
 
 // Other Configuration Constants (same for all boards)
 #define WIND_THRESHOLD 15        // Winds or gusting winds above this but less than HIGH_WIND_THRESHOLD cause LED to either fade or blink between black/clear and the flight category color
-#define HIGH_WIND_THRESHOLD 25   // Winds or gusting winds above this cause LED to blink orange
 #define LOOP_INTERVAL 1000       // Interval in ms between brightness updates, and lightning/storm, high wind blinks
 #define DO_LIGHTNING true        // Causes LED to blink white for thunderstorms or lightning
 #define DO_WINDS true            // Causes LED to 1) fade flight category color or blink black/clear for winds > WIND_THRESHOLD, to blink orange for winds > HIGH_WIND_THRESHOLD
@@ -457,6 +463,9 @@ void printBoardConfig() {
 
   Serial.print(F("BRIGHTNESS: "));
   Serial.println(BRIGHTNESS);
+  
+  Serial.print(F("HIGH_WIND_THRESHOLD: "));
+  Serial.println(HIGH_WIND_THRESHOLD);
   
   Serial.print(F("Total airports in list: "));
   Serial.println(airports.size());
@@ -1038,7 +1047,7 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   else if (compareStringP(condition, VFR_STR)) color = CRGB::Green;
   else {
     // If no flight category was reported but airport has weather data (winds, lightning, etc.)
-    // show 50% white to indicate the airport is active but category is unknown
+    // show 20% gray to indicate the airport is active but category is unknown
     bool hasWeatherData = (wind > 0) || (gusts > 0) || 
                          (wxstring.indexOf(FPSTR(TS_STR)) != -1) || 
                          (currentRawText.indexOf(FPSTR(LTG_STR)) != -1) || 
@@ -1047,7 +1056,7 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
     if (hasWeatherData) {
       color = CRGB::Gray;
       color.nscale8(51);  // Scale to 20% brightness (51/256 ≈ 0.2)
-      Serial.println(F("... no flight category but has weather data, using 20% white"));
+      Serial.println(F("... no flight category but has weather data, using 20% gray"));
     } else {
       color = CRGB::Black;  // No data at all, keep LED off
     }
