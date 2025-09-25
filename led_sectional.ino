@@ -12,6 +12,24 @@
 
 // In my experience, a level shifter is needed for the data signal for the LEDs.
 
+// BOARD CONFIGURATION INSTRUCTIONS:
+// =================================
+// To configure for different boards, scroll down to the "BOARD CONFIGURATIONS" section
+// and uncomment ONLY ONE of the configuration lines:
+// 
+//   #define BOARD_CONFIG_HOME_ASA    // Home & ASA - 30 LEDs, WS2811, RGB, Brightness 70
+//   #define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs, WS2812B, GRB, Brightness 50  
+//   #define BOARD_CONFIG_CUSTOM      // Custom - 25 LEDs, WS2812B, GRB, Brightness 60
+//
+// Each configuration includes:
+//   - NUM_AIRPORTS (number of LEDs)
+//   - LED_TYPE (WS2811, WS2812B, etc.)  
+//   - COLOR_ORDER (RGB, GRB, etc.)
+//   - BRIGHTNESS (0-255)
+//   - airports array (list of airport codes)
+//
+// The configuration will be displayed in the Serial Monitor at startup.
+
 // To get a look at the JSON output directly from a browser, edit the end of next line for an airport or airport list.
 // It's not identical to what the code receives, but can be helpful.
 // https://aviationweather.gov/api/data/metar?format=json&hoursBeforeNow=3&mostRecentForEachStation=true&ids=KTME,KSGR
@@ -194,8 +212,65 @@ bool compareStringP(const String& str, const char* progmemStr) {
   return str.equals(FPSTR(progmemStr));
 }
 
-// Configuration Section - Move all defines to top
-#define NUM_AIRPORTS 30          // This is the number of airports in list, including nulls, NOT # LEDs in string.
+// ===========================
+// BOARD CONFIGURATIONS
+// ===========================
+// Select your board configuration by uncommenting ONE of the following lines:
+#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
+//#define BOARD_CONFIG_HOME          // Home - 30 LEDs
+//#define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs  
+//#define BOARD_CONFIG_CUSTOM      // Custom configuration
+
+// Board Configuration Structures
+struct BoardConfig {
+  int numAirports;
+  int ledType;
+  int colorOrder;
+  int brightness;
+  std::vector<String> airports;
+};
+
+// Define configuration for Home & ASA board
+#ifdef BOARD_CONFIG_HOME
+  #define NUM_AIRPORTS 30
+  #define LED_TYPE WS2811
+  #define COLOR_ORDER RGB
+  #define BRIGHTNESS 70
+  // Airport list defined below in airports vector
+#endif
+
+#ifdef BOARD_CONFIG_ASA
+  #define NUM_AIRPORTS 34
+  #define LED_TYPE WS2811
+  #define COLOR_ORDER RGB
+  #define BRIGHTNESS 70
+  // Airport list defined below in airports vector
+#endif
+
+// Define configuration for Mark L board  
+#ifdef BOARD_CONFIG_MARK_L
+  #define NUM_AIRPORTS 29
+  #define LED_TYPE WS2812B
+  #define COLOR_ORDER GRB
+  #define BRIGHTNESS 50
+  // Airport list defined below in airports vector
+#endif
+
+// Define configuration for Custom board
+#ifdef BOARD_CONFIG_CUSTOM
+  #define NUM_AIRPORTS 25          // Customize this
+  #define LED_TYPE WS2812B         // Customize this
+  #define COLOR_ORDER GRB          // Customize this  
+  #define BRIGHTNESS 60            // Customize this
+  // Airport list defined below in airports vector
+#endif
+
+// Validate that exactly one configuration is selected
+#if defined(BOARD_CONFIG_HOME) + defined(BOARD_CONFIG_ASA) + defined(BOARD_CONFIG_MARK_L) + defined(BOARD_CONFIG_CUSTOM) != 1
+  #error "ERROR: You must uncomment exactly ONE board configuration. Check the BOARD CONFIGURATIONS section."
+#endif
+
+// Other Configuration Constants (same for all boards)
 #define WIND_THRESHOLD 15        // Winds or gusting winds above this but less than HIGH_WIND_THRESHOLD cause LED to either fade or blink between black/clear and the flight category color
 #define HIGH_WIND_THRESHOLD 25   // Winds or gusting winds above this cause LED to blink orange
 #define LOOP_INTERVAL 1000       // Interval in ms between brightness updates, and lightning/storm, high wind blinks
@@ -219,12 +294,6 @@ CRGB leds[NUM_AIRPORTS];
 #define LED_BUILTIN 2  // ON Board LED GPIO 2
 #define DATA_PIN    5 // Kits shipped after March 1, 2019 should use 14. Earlier kits us 5.
                       // I'm using pin D5 (which is GPIO14) on my ESP8266 12-E NodeMCU in April, 2023.  Setting this to 5 works fine.
-
-//WS2812 and GRB for LED string from AliExpress
-#define LED_TYPE WS2811
-#define COLOR_ORDER RGB
-#define BRIGHTNESS 70   // 20-30 suggested for LED strip, 100 for 2811 bulbs
-                        // If using a light sensor, this is the initial brightness on boot.
 
 /* This section only applies if you have an ambient light sensor connected */
 #if USE_LIGHT_SENSOR
@@ -254,13 +323,67 @@ std::vector<unsigned short int> lightningLeds;
 std::vector<unsigned short int> windLeds;
 std::vector<unsigned short int> highwindLeds;
 
-//Home & ASA
-// First 5 entries (indices 0-4) are the legend: VFR, MVFR, IFR, LIFR, WVFR
+// ===========================
+// AIRPORT CONFIGURATIONS
+// ===========================
+// IMPORTANT: First 5 entries (indices 0-4) are ALWAYS the legend: VFR, MVFR, IFR, LIFR, WVFR
 // These will be set to fixed colors and never updated with weather data
-std::vector<String> airports({ "VFR", "MVFR", "IFR", "LIFR", "WVFR", "KUIL", "NULL", "KHQM", "NULL", "KSHN", "KOLM", "KGRF", "KPLU", "KTCM", "KTIW", "KPWT", "KSEA", "KRNT", "KBFI", "KPAE", "KAWO", "K0S9", "KNUW", "KBVS", "KBLI", "KORS", "KFHR", "CYYJ", "NULL", "KCLM" });
+// 
+// TO MODIFY AIRPORTS:
+// 1. Keep the first 5 entries as: "VFR", "MVFR", "IFR", "LIFR", "WVFR"
+// 2. Replace subsequent entries with your airport codes (e.g., "KORD", "KMDW")
+// 3. Use "NULL" for positions where you don't want an LED (creates gaps)
+// 4. Make sure total count matches NUM_AIRPORTS setting above
+// 5. Airport codes should be ICAO format (4 characters, starting with K for US)
 
-//Mark L - 29 LEDs
-//std::vector<String> airports({"VFR", "MVFR", "IFR", "LIFR", "WVFR", "KUIL", "NULL", "KHQM", "NULL", "KSHN", "KOLM", "KGRF", "KPLU", "KTCM", "KTIW", "KSEA", "KRNT", "KBFI", "KPWT", "KPAE", "K0S9", "KAWO", "KNUW", "KBVS", "KBLI", "KORS", "KFHR", "CYYJ", "KCLM"});
+#ifdef BOARD_CONFIG_HOME
+// Home & ASA Configuration - 30 LEDs total (5 legend + 25 airports)
+std::vector<String> airports({ 
+  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
+  "KUIL", "NULL", "KHQM", "NULL", "KSHN",         // Airports 6-10
+  "KOLM", "KGRF", "KPLU", "KTCM", "KTIW",         // Airports 11-15  
+  "KPWT", "KSEA", "KRNT", "KBFI", "KPAE",         // Airports 16-20
+  "KAWO", "K0S9", "KNUW", "KBVS", "KBLI",         // Airports 21-25
+  "KORS", "KFHR", "CYYJ", "NULL", "KCLM"          // Airports 26-30
+});
+#endif
+
+#ifdef BOARD_CONFIG_ASA
+// Home & ASA Configuration - 30 LEDs total (5 legend + 25 airports)
+std::vector<String> airports({ 
+  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
+  "NULL", "KUIL", "NULL", "NULL","NULL",          // Airports 6-10
+  "KHQM", "NULL", "KSHN", "KOLM", "KGRF",         // Airports 11-15  
+  "KPLU", "KTCM", "KTIW", "KPWT", "KSEA",         // Airports 16-20
+  "KRNT", "KBFI", "KPAE", "KAWO", "NULL",         // Airports 21-25
+  "K0S9", "KNUW", "KBVS", "KBLI", "KFHR",         // Airports 26-30
+  "KORS", "CYYJ", "NULL", "KCLM"                  // Airports 31-34
+});
+#endif
+
+#ifdef BOARD_CONFIG_MARK_L
+// Mark L Configuration - 29 LEDs total (5 legend + 24 airports)
+std::vector<String> airports({ 
+  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
+  "KUIL", "NULL", "KHQM", "NULL", "KSHN",         // Airports 6-10
+  "KOLM", "KGRF", "KPLU", "KTCM", "KTIW",         // Airports 11-15
+  "KSEA", "KRNT", "KBFI", "KPWT", "KPAE",         // Airports 16-20  
+  "K0S9", "KAWO", "KNUW", "KBVS", "KBLI",         // Airports 21-25
+  "KORS", "KFHR", "CYYJ", "KCLM"                  // Airports 26-29
+});
+#endif
+
+#ifdef BOARD_CONFIG_CUSTOM  
+// Custom Configuration - 25 LEDs total (5 legend + 20 airports)
+// MODIFY THIS SECTION for your specific airport layout
+std::vector<String> airports({ 
+  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
+  "KORD", "KMDW", "KPWK", "KIGQ", "KLOT",         // Airports 6-10
+  "KDPA", "KARR", "KJOT", "KC09", "KUGN",         // Airports 11-15
+  "KRPJ", "KENW", "KGYY", "KJVL", "KRAC",         // Airports 16-20
+  "KRFD", "KEFT", "KMSN", "KDKB", "KUES"          // Airports 21-25
+});
+#endif
 
 #define DEBUG false
 
@@ -291,12 +414,72 @@ void printMemoryInfo() {
 #endif
 }
 
+// Configuration display function
+void printBoardConfig() {
+  Serial.println(F("========================================"));
+  Serial.println(F("         BOARD CONFIGURATION"));
+  Serial.println(F("========================================"));
+  
+#ifdef BOARD_CONFIG_ASA
+  Serial.println(F("Configuration: ASA"));
+#elif defined(BOARD_CONFIG_HOME)
+  Serial.println(F("Configuration: HOME"));
+#elif defined(BOARD_CONFIG_MARK_L)
+  Serial.println(F("Configuration: MARK_L"));
+#elif defined(BOARD_CONFIG_CUSTOM)
+  Serial.println(F("Configuration: CUSTOM"));
+#endif
+
+  Serial.print(F("NUM_AIRPORTS: "));
+  Serial.println(NUM_AIRPORTS);
+  
+  Serial.print(F("LED_TYPE: "));
+#if LED_TYPE == WS2811
+  Serial.println(F("WS2811"));
+#elif LED_TYPE == WS2812B
+  Serial.println(F("WS2812B"));
+#elif LED_TYPE == WS2812
+  Serial.println(F("WS2812"));
+#else
+  Serial.println(LED_TYPE);
+#endif
+
+  Serial.print(F("COLOR_ORDER: "));
+#if COLOR_ORDER == RGB
+  Serial.println(F("RGB"));
+#elif COLOR_ORDER == GRB
+  Serial.println(F("GRB"));
+#elif COLOR_ORDER == BRG
+  Serial.println(F("BRG"));
+#else
+  Serial.println(F("Other"));
+#endif
+
+  Serial.print(F("BRIGHTNESS: "));
+  Serial.println(BRIGHTNESS);
+  
+  Serial.print(F("Total airports in list: "));
+  Serial.println(airports.size());
+  
+  Serial.println(F("Airport codes:"));
+  for (int i = 0; i < airports.size(); i++) {
+    if (i % 10 == 0) Serial.println(); // New line every 10 airports
+    Serial.print(airports[i]);
+    Serial.print(F(" "));
+  }
+  Serial.println();
+  Serial.println(F("========================================"));
+}
+
 void setup() {
   Serial.begin(115200);     // initialize serial port
   
   // Print initial memory info
   Serial.println(F("LED Sectional starting..."));
   printMemoryInfo();
+  
+  // Display board configuration
+  printBoardConfig();
 
   pinMode(LED_BUILTIN, OUTPUT); // give us control of the onboard LED
   digitalWrite(LED_BUILTIN, LOW);
