@@ -205,7 +205,7 @@ const char LTNG_STR[] PROGMEM = "LTNG";
 // XML tag strings no longer needed for JSON parsing
 
 // Server strings in PROGMEM
-const char SERVER_STR[] PROGMEM = "aviationweather.gov";
+const char SERVER_STR[] PROGMEM = "connect.aviationweather.gov";
 const char BASE_URI_STR[] PROGMEM = "/api/data/metar?format=json&hoursBeforeNow=3&mostRecentForEachStation=true&ids=";
 const char USER_AGENT_STR[] PROGMEM = "LED Sectional Client";
 
@@ -218,8 +218,8 @@ bool compareStringP(const String& str, const char* progmemStr) {
 // BOARD CONFIGURATIONS
 // ===========================
 // Select your board configuration by uncommenting ONE of the following lines:
-#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
-//#define BOARD_CONFIG_HOME          // Home - 30 LEDs
+//#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
+#define BOARD_CONFIG_HOME          // Home - 30 LEDs
 //#define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs  
 //#define BOARD_CONFIG_CUSTOM      // Custom configuration
 
@@ -343,7 +343,7 @@ std::vector<unsigned short int> highwindLeds;
 // 5. Airport codes should be ICAO format (4 characters, starting with K for US)
 
 #ifdef BOARD_CONFIG_HOME
-// Home & ASA Configuration - 30 LEDs total (5 legend + 25 airports)
+// Home Configuration - 30 LEDs total (5 legend + 25 airports)
 std::vector<String> airports({ 
   "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
   "KUIL", "NULL", "KHQM", "NULL", "KSHN",         // Airports 6-10
@@ -355,7 +355,7 @@ std::vector<String> airports({
 #endif
 
 #ifdef BOARD_CONFIG_ASA
-// Home & ASA Configuration - 30 LEDs total (5 legend + 25 airports)
+// ASA Configuration - 30 LEDs total (5 legend + 25 airports)
 std::vector<String> airports({ 
   "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
   "NULL", "KUIL", "NULL", "NULL","NULL",          // Airports 6-10
@@ -697,6 +697,12 @@ void loop() {
         delay(REQUEST_INTERVAL);
       }
     } else {
+      // Web request failed - set all non-legend lights to black
+      Serial.println(F("METAR request failed! Setting all non-legend LEDs to black."));
+      for (int i = 5; i < NUM_AIRPORTS; i++) {
+        leds[i] = CRGB::Black;
+      }
+      FastLED.show();
       digitalWrite(LED_BUILTIN, HIGH);
       delay(RETRY_TIMEOUT); // try again if unsuccessful
     }
@@ -1046,21 +1052,7 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   else if (compareStringP(condition, MVFR_STR)) color = CRGB::Blue;
   else if (compareStringP(condition, VFR_STR)) color = CRGB::Green;
   else {
-    // If no flight category was reported but airport has weather data (winds, lightning, etc.)
-    // show 20% gray to indicate the airport is active but category is unknown
-    bool hasWeatherData = (wind > 0) || (gusts > 0) || 
-                         (wxstring.indexOf(FPSTR(TS_STR)) != -1) || 
-                         (currentRawText.indexOf(FPSTR(LTG_STR)) != -1) || 
-                         (currentRawText.indexOf(FPSTR(LTNG_STR)) != -1);
-    
-    if (hasWeatherData) {
-      color = CRGB::Gray;
-      color.nscale8(51);  // Scale to 20% brightness (51/256 ≈ 0.2)
-      Serial.println(F("... no flight category but has weather data, using 20% gray"));
-    } else {
       color = CRGB::Black;  // No data at all, keep LED off
     }
-  }
-
   leds[led] = color;
 }
