@@ -1,3 +1,36 @@
+# Arduino IoT Cloud Secrets - IMPORTANT: Keep credentials secure
+arduino_secrets.h
+arduino_secrets_*.h
+
+# Existing project files
 pcb files/.DS_Store
 pcb files/LED Sectional BOM.xlsx
 .DS_Store
+
+# Arduino IDE Files
+*.elf
+*.hex
+*.bin
+*.map
+
+# OS Generated Files
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE Files
+.vscode/
+.idea/
+
+# Build Directories
+build/
+bin/
+obj/
+
+# Temporary Files
+*.tmp
+*.temp
+*~

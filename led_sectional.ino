@@ -14,23 +14,27 @@
 
 // BOARD CONFIGURATION INSTRUCTIONS:
 // =================================
-// To configure for different boards, scroll down to the "BOARD CONFIGURATIONS" section
-// and uncomment ONLY ONE of the configuration lines:
-// 
-//   #define BOARD_CONFIG_ASA         // ASA - 34 LEDs, WS2811, RGB, Brightness 70, High Wind Threshold 25
-//   #define BOARD_CONFIG_HOME        // Home - 30 LEDs, WS2811, RGB, Brightness 70, High Wind Threshold 25
-//   #define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs, WS2812B, GRB, Brightness 50, High Wind Threshold 25
-//   #define BOARD_CONFIG_CUSTOM      // Custom - 25 LEDs, WS2812B, GRB, Brightness 60, High Wind Threshold 25
+// Board configurations are now stored in separate config files.
+// To select which board configuration to use, set BOARD_CONFIG_FILE below:
 //
-// Each configuration includes:
-//   - NUM_AIRPORTS (number of LEDs)
-//   - LED_TYPE (WS2811, WS2812B, etc.)  
-//   - COLOR_ORDER (RGB, GRB, etc.)
-//   - BRIGHTNESS (0-255)
-//   - HIGH_WIND_THRESHOLD (wind speed threshold for orange blinking)
-//   - airports array (list of airport codes)
+//   #define BOARD_CONFIG_FILE "config_home.h"     // Home configuration
+//   #define BOARD_CONFIG_FILE "config_asa.h"      // ASA configuration  
+//   #define BOARD_CONFIG_FILE "config_mark_l.h"   // Mark L configuration
+//   #define BOARD_CONFIG_FILE "config_custom.h"   // Custom configuration
+//
+// Or create your own config file by copying config_custom.h
+//
+// Each configuration file includes:
+//   - Board identification (name, location)
+//   - LED hardware settings (count, type, brightness)
+//   - Weather alert thresholds
+//   - Airport list for your sectional
+//   - All timing and feature settings
 //
 // The configuration will be displayed in the Serial Monitor at startup.
+
+// SELECT YOUR BOARD CONFIGURATION FILE:
+#define BOARD_CONFIG_FILE "config_home.h"  // Change this to your config file
 
 // To get a look at the JSON output directly from a browser, edit the end of next line for an airport or airport list.
 // It's not identical to what the code receives, but can be helpful.
@@ -183,6 +187,30 @@ SOLUTION: Now shows 50% white LED for airports with weather data but no flight c
 #include <ESP8266WiFi.h>
 #endif
 
+// Arduino IoT Cloud includes (optional - comment out if not using Arduino Cloud)
+#define USE_ARDUINO_CLOUD true  // Set to false to disable Arduino Cloud features
+
+#if USE_ARDUINO_CLOUD
+  // Auto-select the correct secrets file based on board configuration
+  // Note: You can also manually specify which secrets file to use
+  #ifdef BOARD_NAME
+    // Check board name and include appropriate secrets file
+    // For now, you'll need to manually set which secrets file to use
+    // Uncomment the line for your board:
+    
+    #include "arduino_secrets_home.h"    // For Home board
+    // #include "arduino_secrets_asa.h"     // For ASA board  
+    // #include "arduino_secrets_mark_l.h"  // For Mark L board
+    // #include "arduino_secrets_custom.h"  // For custom board
+  #else
+    // Fallback to generic secrets file
+    #include "arduino_secrets.h"
+  #endif
+  
+  #include "thingProperties.h"
+  #include <ArduinoIoTCloud.h>
+  #include <Arduino_ConnectionHandler.h>
+#endif
 
 #include <WiFiManager.h>      // https://github.com/tzapu/WiFiManager
 #include <FastLED.h>
@@ -215,91 +243,61 @@ bool compareStringP(const String& str, const char* progmemStr) {
 }
 
 // ===========================
-// BOARD CONFIGURATIONS
+// BOARD CONFIGURATION
 // ===========================
-// Select your board configuration by uncommenting ONE of the following lines:
-//#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
-#define BOARD_CONFIG_HOME          // Home - 30 LEDs
-//#define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs  
-//#define BOARD_CONFIG_CUSTOM      // Custom configuration
+// Include the selected board configuration file
+#include BOARD_CONFIG_FILE
 
-// Board Configuration Structures
-struct BoardConfig {
-  int numAirports;
-  int ledType;
-  int colorOrder;
-  int brightness;
-  int highWindThreshold;
-  std::vector<String> airports;
-};
+// Validate that the config file was included properly
+#ifndef BOARD_NAME
+  #error "Board configuration file not found or invalid. Check BOARD_CONFIG_FILE setting."
+#endif 
 
-// Define configuration for Home & ASA board
-#ifdef BOARD_CONFIG_HOME
-  #define NUM_AIRPORTS 30
-  #define LED_TYPE WS2811
-  #define COLOR_ORDER RGB
-  #define BRIGHTNESS 70
-  #define HIGH_WIND_THRESHOLD 20   // Winds or gusting winds above this cause LED to blink orange
-  // Airport list defined below in airports vector
-#endif
+// Configuration constants now come from the board config file
+// These are defined in the included config file:
+// - WIND_THRESHOLD, HIGH_WIND_THRESHOLD
+// - LOOP_INTERVAL, REQUEST_INTERVAL  
+// - ENABLE_LIGHTNING_ALERTS, ENABLE_WIND_ALERTS
+// - FADE_FOR_HIGH_WINDS
+// - USE_LIGHT_SENSOR, LIGHT_SENSOR_TSL2561
+// - MIN_BRIGHTNESS, MAX_BRIGHTNESS, MIN_LIGHT, MAX_LIGHT
 
-#ifdef BOARD_CONFIG_ASA
-  #define NUM_AIRPORTS 34
-  #define LED_TYPE WS2811
-  #define COLOR_ORDER RGB
-  #define BRIGHTNESS 70
-  #define HIGH_WIND_THRESHOLD 25   // Winds or gusting winds above this cause LED to blink orange
-  // Airport list defined below in airports vector
-#endif
-
-// Define configuration for Mark L board  
-#ifdef BOARD_CONFIG_MARK_L
-  #define NUM_AIRPORTS 29
-  #define LED_TYPE WS2812B
-  #define COLOR_ORDER GRB
-  #define BRIGHTNESS 50
-  #define HIGH_WIND_THRESHOLD 20   // Winds or gusting winds above this cause LED to blink orange
-  // Airport list defined below in airports vector
-#endif
-
-// Define configuration for Custom board
-#ifdef BOARD_CONFIG_CUSTOM
-  #define NUM_AIRPORTS 25          // Customize this
-  #define LED_TYPE WS2812B         // Customize this
-  #define COLOR_ORDER GRB          // Customize this  
-  #define BRIGHTNESS 60            // Customize this
-  #define HIGH_WIND_THRESHOLD 25   // Customize this - Winds or gusting winds above this cause LED to blink orange
-  // Airport list defined below in airports vector
-#endif
-
-// Validate that exactly one configuration is selected
-#if defined(BOARD_CONFIG_HOME) + defined(BOARD_CONFIG_ASA) + defined(BOARD_CONFIG_MARK_L) + defined(BOARD_CONFIG_CUSTOM) != 1
-  #error "ERROR: You must uncomment exactly ONE board configuration. Check the BOARD CONFIGURATIONS section."
-#endif
-
-// Other Configuration Constants (same for all boards)
-#define WIND_THRESHOLD 15        // Winds or gusting winds above this but less than HIGH_WIND_THRESHOLD cause LED to either fade or blink between black/clear and the flight category color
-#define LOOP_INTERVAL 1000       // Interval in ms between brightness updates, and lightning/storm, high wind blinks
-#define DO_LIGHTNING true        // Causes LED to blink white for thunderstorms or lightning
-#define DO_WINDS true            // Causes LED to 1) fade flight category color or blink black/clear for winds > WIND_THRESHOLD, to blink orange for winds > HIGH_WIND_THRESHOLD
+// Runtime variables
 boolean HIGH_WINDS = false;      // Initialize global var
-#define FADE_FOR_HIGH_WINDS true // Blink to fade flight category color by 50% vs blinking black/clear if set to false
 boolean VERY_HIGH_WINDS = false; // Initialize global var
-#define REQUEST_INTERVAL 300000  // Interval in ms for METAR updates. In practice LOOP_INTERVAL is added. 300000 is 5 minutes.
 
-#define USE_LIGHT_SENSOR false      // Set true if you're using any light sensor.
-#define LIGHT_SENSOR_TSL2561 false  // Set true if you're using a TSL2561 digital light sensor.  False assumes an analog sensor.
+// Aliases for backward compatibility with old code
+#define DO_LIGHTNING ENABLE_LIGHTNING_ALERTS
+#define DO_WINDS ENABLE_WIND_ALERTS
 
 // WiFi Management for ESP8266
 WiFiManager wm;
 #define WIFI_TIMEOUT 60        // Connection timeout in seconds for call to setConfigPortalTimeout
 boolean isWiFiConnected = false;
 
+// Arduino Cloud variables
+#if USE_ARDUINO_CLOUD
+  boolean useArduinoCloud = true;  
+  boolean cloudConnected = false;
+  unsigned long lastCloudUpdate = 0;
+  #define CLOUD_UPDATE_INTERVAL 60000  // Update cloud every 60 seconds
+#else
+  boolean useArduinoCloud = false;
+  boolean cloudConnected = false;
+  unsigned long lastCloudUpdate = 0;  
+#endif
+
+// Cloud logging variables
+String lastLogMessage = "";
+int totalAirportsProcessed = 0;
+int lightningCount = 0;
+int highWindCount = 0;
+int veryHighWindCount = 0;
+
 // Define the array of leds
 CRGB leds[NUM_AIRPORTS];
 #define LED_BUILTIN 2  // ON Board LED GPIO 2
-#define DATA_PIN    5 // Kits shipped after March 1, 2019 should use 14. Earlier kits us 5.
-                      // I'm using pin D5 (which is GPIO14) on my ESP8266 12-E NodeMCU in April, 2023.  Setting this to 5 works fine.
+// DATA_PIN is now defined in the board configuration file
 
 /* This section only applies if you have an ambient light sensor connected */
 #if USE_LIGHT_SENSOR
@@ -329,67 +327,8 @@ std::vector<unsigned short int> lightningLeds;
 std::vector<unsigned short int> windLeds;
 std::vector<unsigned short int> highwindLeds;
 
-// ===========================
-// AIRPORT CONFIGURATIONS
-// ===========================
-// IMPORTANT: First 5 entries (indices 0-4) are ALWAYS the legend: VFR, MVFR, IFR, LIFR, WVFR
-// These will be set to fixed colors and never updated with weather data
-// 
-// TO MODIFY AIRPORTS:
-// 1. Keep the first 5 entries as: "VFR", "MVFR", "IFR", "LIFR", "WVFR"
-// 2. Replace subsequent entries with your airport codes (e.g., "KORD", "KMDW")
-// 3. Use "NULL" for positions where you don't want an LED (creates gaps)
-// 4. Make sure total count matches NUM_AIRPORTS setting above
-// 5. Airport codes should be ICAO format (4 characters, starting with K for US)
-
-#ifdef BOARD_CONFIG_HOME
-// Home Configuration - 30 LEDs total (5 legend + 25 airports)
-std::vector<String> airports({ 
-  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
-  "KUIL", "NULL", "KHQM", "NULL", "KSHN",         // Airports 6-10
-  "KOLM", "KGRF", "KPLU", "KTCM", "KTIW",         // Airports 11-15  
-  "KPWT", "KSEA", "KRNT", "KBFI", "KPAE",         // Airports 16-20
-  "KAWO", "K0S9", "KNUW", "KBVS", "KBLI",         // Airports 21-25
-  "KORS", "KFHR", "CYYJ", "NULL", "KCLM"          // Airports 26-30
-});
-#endif
-
-#ifdef BOARD_CONFIG_ASA
-// ASA Configuration - 30 LEDs total (5 legend + 25 airports)
-std::vector<String> airports({ 
-  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
-  "NULL", "KUIL", "NULL", "NULL","NULL",          // Airports 6-10
-  "KHQM", "NULL", "KSHN", "KOLM", "KGRF",         // Airports 11-15  
-  "KPLU", "KTCM", "KTIW", "KPWT", "KSEA",         // Airports 16-20
-  "KRNT", "KBFI", "KPAE", "KAWO", "NULL",         // Airports 21-25
-  "K0S9", "KNUW", "KBVS", "KBLI", "KFHR",         // Airports 26-30
-  "KORS", "CYYJ", "NULL", "KCLM"                  // Airports 31-34
-});
-#endif
-
-#ifdef BOARD_CONFIG_MARK_L
-// Mark L Configuration - 29 LEDs total (5 legend + 24 airports)
-std::vector<String> airports({ 
-  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
-  "KUIL", "NULL", "KHQM", "NULL", "KSHN",         // Airports 6-10
-  "KOLM", "KGRF", "KPLU", "KTCM", "KTIW",         // Airports 11-15
-  "KSEA", "KRNT", "KBFI", "KPWT", "KPAE",         // Airports 16-20  
-  "K0S9", "KAWO", "KNUW", "KBVS", "KBLI",         // Airports 21-25
-  "KORS", "KFHR", "CYYJ", "KCLM"                  // Airports 26-29
-});
-#endif
-
-#ifdef BOARD_CONFIG_CUSTOM  
-// Custom Configuration - 25 LEDs total (5 legend + 20 airports)
-// MODIFY THIS SECTION for your specific airport layout
-std::vector<String> airports({ 
-  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
-  "KORD", "KMDW", "KPWK", "KIGQ", "KLOT",         // Airports 6-10
-  "KDPA", "KARR", "KJOT", "KC09", "KUGN",         // Airports 11-15
-  "KRPJ", "KENW", "KGYY", "KJVL", "KRAC",         // Airports 16-20
-  "KRFD", "KEFT", "KMSN", "KDKB", "KUES"          // Airports 21-25
-});
-#endif
+// Airport configuration now comes from the included config file
+// The AIRPORTS[] array is defined in the board configuration file
 
 #define DEBUG false
 
@@ -426,15 +365,17 @@ void printBoardConfig() {
   Serial.println(F("         BOARD CONFIGURATION"));
   Serial.println(F("========================================"));
   
-#ifdef BOARD_CONFIG_ASA
-  Serial.println(F("Configuration: ASA"));
-#elif defined(BOARD_CONFIG_HOME)
-  Serial.println(F("Configuration: HOME"));
-#elif defined(BOARD_CONFIG_MARK_L)
-  Serial.println(F("Configuration: MARK_L"));
-#elif defined(BOARD_CONFIG_CUSTOM)
-  Serial.println(F("Configuration: CUSTOM"));
-#endif
+  Serial.print(F("Board Name: "));
+  Serial.println(F(BOARD_NAME));
+  
+  Serial.print(F("Board Location: "));
+  Serial.println(F(BOARD_LOCATION));
+  
+  Serial.print(F("Description: "));
+  Serial.println(F(BOARD_DESCRIPTION));
+  
+  Serial.print(F("Config File: "));
+  Serial.println(F(BOARD_CONFIG_FILE));
 
   Serial.print(F("NUM_AIRPORTS: "));
   Serial.println(NUM_AIRPORTS);
@@ -467,13 +408,16 @@ void printBoardConfig() {
   Serial.print(F("HIGH_WIND_THRESHOLD: "));
   Serial.println(HIGH_WIND_THRESHOLD);
   
+  Serial.print(F("DATA_PIN: "));
+  Serial.println(DATA_PIN);
+  
   Serial.print(F("Total airports in list: "));
-  Serial.println(airports.size());
+  Serial.println(NUM_AIRPORTS);
   
   Serial.println(F("Airport codes:"));
-  for (int i = 0; i < airports.size(); i++) {
+  for (int i = 0; i < NUM_AIRPORTS; i++) {
     if (i % 10 == 0) Serial.println(); // New line every 10 airports
-    Serial.print(airports[i]);
+    Serial.print(AIRPORTS[i]);
     Serial.print(F(" "));
   }
   Serial.println();
@@ -531,6 +475,27 @@ void setup() {
   wm.setConfigPortalTimeout(WIFI_TIMEOUT);
   wm.setConnectTimeout(WIFI_TIMEOUT);
 
+  // Initialize Arduino IoT Cloud if enabled
+#if USE_ARDUINO_CLOUD
+  if (useArduinoCloud) {
+    Serial.println(F("Initializing Arduino IoT Cloud..."));
+    
+    // Initialize properties defined in thingProperties.h
+    initProperties();
+    
+    // Set up cloud connection using WiFi connection handler
+    ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+    
+    // Enable debug messages for cloud
+    setDebugMessageLevel(2);
+    ArduinoCloud.printDebugInfo();
+    
+    Serial.println(F("Arduino IoT Cloud initialization complete"));
+  }
+#else
+  Serial.println(F("Arduino IoT Cloud disabled (USE_ARDUINO_CLOUD = false)"));
+#endif
+
 }  // END SETUP
 
 // Helper function to set LED status colors (eliminates repeated loops)
@@ -564,7 +529,7 @@ void blinkLEDs(const std::vector<unsigned short int>& ledList, CRGB blinkColor, 
     Serial.print(F(" on LED: "));
     Serial.print(currentLed);
     Serial.print(F(", Airport Code: "));
-    Serial.println(airports[currentLed]);
+    Serial.println(AIRPORTS[currentLed]);
   }
   
   delay(25); // extra delay seems necessary with light sensor
@@ -612,6 +577,27 @@ void adjustBrightness() {
 
 void loop() {
   digitalWrite(LED_BUILTIN, LOW); // on if we're awake
+
+  // Update Arduino Cloud connection
+#if USE_ARDUINO_CLOUD
+  if (useArduinoCloud) {
+    ArduinoCloud.update();
+    cloudConnected = ArduinoCloud.connected();
+    
+    // Handle brightness override from cloud
+    static int lastBrightnessOverride = -2; // Track changes
+    if (brightness_override != lastBrightnessOverride) {
+      if (brightness_override >= 0 && brightness_override <= 255) {
+        FastLED.setBrightness(brightness_override);
+        FastLED.show();
+      } else if (brightness_override == -1) {
+        FastLED.setBrightness(BRIGHTNESS);
+        FastLED.show();
+      }
+      lastBrightnessOverride = brightness_override;
+    }
+  }
+#endif
 
   #if USE_LIGHT_SENSOR
   adjustBrightness();
@@ -679,6 +665,9 @@ void loop() {
     if (getMetars()) {
       Serial.println(F("Refreshing LEDs."));
       FastLED.show();
+      
+      // Update cloud variables with current status
+      updateCloudVariables();
       if ((DO_LIGHTNING && lightningLeds.size() > 0) || (DO_WINDS && windLeds.size() > 0) || USE_LIGHT_SENSOR || (DO_WINDS && highwindLeds.size() > 0)) {
         Serial.println(F("There is lightning, thunderstorms or high wind, or we're using a light sensor, so no long sleep."));
         Serial.print(F("# LEDs with high winds or gusts: "));
@@ -753,6 +742,12 @@ bool getMetars(){
   windLeds.clear();
   highwindLeds.clear();
   
+  // Reset cloud logging counters
+  totalAirportsProcessed = 0;
+  lightningCount = 0;
+  highWindCount = 0;
+  veryHighWindCount = 0;
+  
   // Reserve capacity for vectors to prevent reallocation
   lightningLeds.reserve(NUM_AIRPORTS / 4);  // Estimate max 25% might have lightning
   windLeds.reserve(NUM_AIRPORTS / 4);       // Estimate max 25% might have high winds
@@ -764,16 +759,16 @@ bool getMetars(){
   airportString.reserve(300); // Estimate for airport list string
   bool firstAirport = true;
   
-  // Build comma-separated list of airport IDs from airport string vector (list) to send to www.aviationweather.gov
+  // Build comma-separated list of airport IDs from AIRPORTS array to send to www.aviationweather.gov
   // Skip legend entries (first 5) and NULL entries for efficiency
   for (int i = 5; i < NUM_AIRPORTS; i++) { // Start at 5 to skip legend entries
-    if (airports[i] != F("NULL")) {
+    if (strcmp(AIRPORTS[i], "NULL") != 0) {
       if (firstAirport) {
         firstAirport = false;
-        airportString = airports[i];
+        airportString = AIRPORTS[i];
       } else {
         airportString += F(",");
-        airportString += airports[i];
+        airportString += AIRPORTS[i];
       }
     }
   }
@@ -984,7 +979,7 @@ bool getMetars(){
       led.reserve(8); // Most airports appear only once, some twice
       
       for (unsigned short int i = 0; i < NUM_AIRPORTS; i++) {
-        if (airports[i] == currentMetar.icaoId) {
+        if (currentMetar.icaoId.equals(AIRPORTS[i])) {
           led.push_back(i);
           // Continue searching as some airports may appear multiple times
         }
@@ -1005,11 +1000,86 @@ bool getMetars(){
     Serial.print(F("Processed "));
     Serial.print(processedAirports);
     Serial.println(F(" airports total"));
+    
+    // Update cloud statistics
+    totalAirportsProcessed = processedAirports;
+    lightningCount = lightningLeds.size();
+    highWindCount = windLeds.size();
+    veryHighWindCount = highwindLeds.size();
   }
   
   // Print memory info after processing
   printMemoryInfo();
   return true;
+}
+
+// Function to update Arduino Cloud variables
+void updateCloudVariables() {
+#if USE_ARDUINO_CLOUD
+  if (!useArduinoCloud || !cloudConnected) {
+    return;
+  }
+  
+  unsigned long currentTime = millis();
+  if (currentTime - lastCloudUpdate < CLOUD_UPDATE_INTERVAL) {
+    return; // Don't update too frequently
+  }
+  
+  lastCloudUpdate = currentTime;
+  
+  // Update cloud properties
+  airports_processed = totalAirportsProcessed;
+  lightning_alerts = lightningCount;
+  high_wind_alerts = highWindCount;
+  very_high_wind_alerts = veryHighWindCount;
+  device_status = "Active";
+  cloud_connected = cloudConnected;
+  
+  // Update timestamp
+  last_update = String(millis() / 1000) + "s uptime";
+  
+  // Create a status log message
+  String statusMsg = "METAR Update: ";
+  statusMsg += totalAirportsProcessed;
+  statusMsg += " airports, ";
+  statusMsg += lightningCount;
+  statusMsg += " lightning, ";
+  statusMsg += (highWindCount + veryHighWindCount);
+  statusMsg += " wind alerts";
+  
+  log_message = statusMsg;
+  
+  Serial.println(F("Updated Arduino Cloud variables"));
+  Serial.println(statusMsg);
+#else
+  // Print status to serial when cloud is disabled
+  String statusMsg = "METAR Update: ";
+  statusMsg += totalAirportsProcessed;
+  statusMsg += " airports, ";
+  statusMsg += lightningCount;
+  statusMsg += " lightning, ";
+  statusMsg += (highWindCount + veryHighWindCount);
+  statusMsg += " wind alerts";
+  Serial.println(statusMsg);
+#endif
+}
+
+// Function to log events to Arduino Cloud
+void logToCloud(String message) {
+#if USE_ARDUINO_CLOUD
+  if (!useArduinoCloud || !cloudConnected) {
+    Serial.print(F("Local Log: "));
+    Serial.println(message);
+    return;
+  }
+  
+  log_message = message;
+  Serial.print(F("Cloud Log: "));
+  Serial.println(message);
+#else
+  Serial.print(F("Local Log: "));
+  Serial.println(message);
+#endif
 }
 
 void doColor(String identifier, unsigned short int led, int wind, int gusts, String condition, String wxstring, String currentRawText) {
@@ -1033,18 +1103,34 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   
   // LTG or LTNG for lightning is in rawOb of METAR, not in any other JSON field.
   // We'll blink white for either or both of lightning and thunderstorms.
-  if ((wxstring.indexOf(FPSTR(TS_STR)) != -1) || (currentRawText.indexOf(FPSTR(LTG_STR)) != -1) || (currentRawText.indexOf(FPSTR(LTNG_STR)) != -1)) {
+  // Check cloud control for lightning alerts
+  bool lightningEnabled = DO_LIGHTNING;
+#if USE_ARDUINO_CLOUD
+  if (useArduinoCloud && cloudConnected) {
+    lightningEnabled = enable_lightning_alerts;
+  }
+#endif
+  if (lightningEnabled && ((wxstring.indexOf(FPSTR(TS_STR)) != -1) || (currentRawText.indexOf(FPSTR(LTG_STR)) != -1) || (currentRawText.indexOf(FPSTR(LTNG_STR)) != -1))) {
     Serial.println(F("... found thunderstorms or lightning!"));
     lightningLeds.push_back(led);
   }
-  if ((wind > HIGH_WIND_THRESHOLD) || (gusts > HIGH_WIND_THRESHOLD)) {
-    Serial.println(F("... found very high winds or gusts!"));
-    VERY_HIGH_WINDS = true;
-    highwindLeds.push_back(led);
-  } else if ((wind > WIND_THRESHOLD) || (gusts > WIND_THRESHOLD)) {
-       Serial.println(F("... found high winds or gusts!"));
-      HIGH_WINDS = true;
-      windLeds.push_back(led);
+  // Check cloud control for wind alerts  
+  bool windEnabled = DO_WINDS;
+#if USE_ARDUINO_CLOUD
+  if (useArduinoCloud && cloudConnected) {
+    windEnabled = enable_wind_alerts;
+  }
+#endif
+  if (windEnabled) {
+    if ((wind > HIGH_WIND_THRESHOLD) || (gusts > HIGH_WIND_THRESHOLD)) {
+      Serial.println(F("... found very high winds or gusts!"));
+      VERY_HIGH_WINDS = true;
+      highwindLeds.push_back(led);
+    } else if ((wind > WIND_THRESHOLD) || (gusts > WIND_THRESHOLD)) {
+         Serial.println(F("... found high winds or gusts!"));
+        HIGH_WINDS = true;
+        windLeds.push_back(led);
+    }
   }
 
   if (compareStringP(condition, LIFR_STR)) color = CRGB::Magenta;

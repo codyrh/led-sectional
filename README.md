@@ -51,8 +51,68 @@ Edited to show count of LEDs with thunderstorms/lightning, high winds, very high
 
 =====================
 
-This uses an Arduino to download METARs for a set of airports and assign a color to a LED representing each airport so that they can be put into a sectional. It is inspired by https://www.reddit.com/r/flying/comments/7avr8q/flight_conditions_sectional_wall_art_thing/
+This uses an ESP8266 or ESP32 Arduino-compatible device to download METARs for a set of airports and assign a color to a LED representing each airport so that they can be put into a sectional. It is inspired by https://www.reddit.com/r/flying/comments/7avr8q/flight_conditions_sectional_wall_art_thing/
 
-This is designed to run on an ESP8266 or ESP32 and deployed using Arduino, but with minor tweaks (e.g. updated libraries) it should run on most Arduino platforms.
+## Features
 
-Use ESP8266 Core V2.74 for the ESP8266, or esp32 2.0.11 by Espressif for the ESP32, and FastLED V3.30
+- **Real-time Weather**: Downloads METAR data from aviationweather.gov
+- **Visual Indicators**: LED colors represent flight categories (VFR=Green, MVFR=Blue, IFR=Red, LIFR=Magenta)
+- **Weather Alerts**: Blinking effects for lightning/thunderstorms and high winds
+- **WiFi Management**: Easy WiFi setup using WiFiManager
+- **Arduino Cloud Integration**: Remote monitoring, logging, and OTA updates (NEW!)
+
+## Hardware Requirements
+
+- ESP8266 (NodeMCU 1.0/ESP-12E Module) or ESP32-WROOM-DA
+- WS2811/WS2812B LED strip or individual LEDs
+- Level shifter (recommended for data signal)
+- Power supply appropriate for your LED count
+
+## Software Requirements
+
+Use ESP8266 Core V2.74 for the ESP8266, or esp32 2.0.11 by Espressif for the ESP32, and these libraries:
+- FastLED V3.30
+- WiFiManager 2.0.15-rc.1
+- ArduinoJson 6.21.3
+- ArduinoIoTCloud (optional - for cloud features)
+- Arduino_ConnectionHandler (optional - for cloud features)
+
+## New: Multi-Board Configuration System
+
+This project now supports **separate configuration files** for each board, making it easy to manage multiple LED sectionals:
+
+### Easy Board Management
+- **Config Files**: Each board has its own `config_[name].h` file with all settings
+- **Separate Credentials**: Individual Arduino Cloud credentials for each board
+- **Quick Switching**: Change boards by modifying one line in the main code
+- **No More #defines**: Clean, organized configuration system
+
+### Quick Setup
+1. Choose your config: `#define BOARD_CONFIG_FILE "config_home.h"`
+2. Customize settings in your config file
+3. Set up Arduino Cloud credentials (optional)
+4. Upload and run!
+
+**See [MULTI_BOARD_CONFIG.md](MULTI_BOARD_CONFIG.md) for complete setup instructions**
+
+## Arduino Cloud Integration
+
+This project now supports Arduino IoT Cloud for advanced features:
+
+### Features
+- **Remote Monitoring**: View real-time status from anywhere
+- **OTA Updates**: Update firmware wirelessly
+- **Cloud Logging**: Track weather alerts and system status
+- **Remote Control**: Enable/disable features remotely
+- **Historical Data**: Automatic data logging and analysis
+
+### Quick Setup
+1. See [ARDUINO_CLOUD_SETUP.md](ARDUINO_CLOUD_SETUP.md) for detailed setup instructions
+2. See [CLOUD_USAGE_EXAMPLES.md](CLOUD_USAGE_EXAMPLES.md) for usage examples
+3. Arduino Cloud features are optional - the project works fine without them
+
+### Enable/Disable Cloud Features
+In the main .ino file, you can easily enable or disable cloud features:
+```cpp
+#define USE_ARDUINO_CLOUD true  // Set to false to disable Arduino Cloud features
+```
