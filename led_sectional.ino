@@ -395,6 +395,7 @@ std::vector<String> airports({
 
 #define READ_TIMEOUT 15     // Cancel query if no data received (seconds)
 #define RETRY_TIMEOUT 15000 // in ms
+#define MAX_RETRY_ATTEMPTS 3 // Number of times to retry METAR fetch before giving up
 
 // Store server and URI strings in PROGMEM instead of #define to save RAM
 #define SERVER FPSTR(SERVER_STR)
@@ -627,14 +628,26 @@ void loop() {
   if (DO_LIGHTNING || DO_WINDS || USE_LIGHT_SENSOR)
     loopThreshold = REQUEST_INTERVAL / LOOP_INTERVAL;
 
-  // Connect to WiFi
-  if (!isWiFiConnected) {
+  // Connect to WiFi or verify connection
+  if (!isWiFiConnected || WiFi.status() != WL_CONNECTED) {
     if (ledStatus) {
       setStatusLEDs(CRGB::Orange);
     }
+    
+    // Reset connection flag if WiFi is not actually connected
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println(F("WiFi connection lost, reconnecting..."));
+      isWiFiConnected = false;
+    }
+    
     isWiFiConnected = wm.autoConnect();
     if (isWiFiConnected) {
       Serial.println(F("Connected to local network"));
+      Serial.print(F("IP address: "));
+      Serial.println(WiFi.localIP());
+      Serial.print(F("Signal strength (RSSI): "));
+      Serial.print(WiFi.RSSI());
+      Serial.println(F(" dBm"));
       if (ledStatus) {
         setStatusLEDs(CRGB::Purple);
       }
@@ -676,7 +689,45 @@ void loop() {
     }
 
     Serial.println(F("Getting METARs ..."));
-    if (getMetars()) {
+    
+    // Retry logic: attempt up to MAX_RETRY_ATTEMPTS times
+    bool metarSuccess = false;
+    for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS && !metarSuccess; attempt++) {
+      if (attempt > 1) {
+        Serial.print(F("Retry attempt "));
+        Serial.print(attempt);
+        Serial.print(F(" of "));
+        Serial.println(MAX_RETRY_ATTEMPTS);
+        
+        // Check WiFi connection before retry
+        if (WiFi.status() != WL_CONNECTED) {
+          Serial.println(F("WiFi disconnected! Attempting to reconnect..."));
+          isWiFiConnected = false;
+          setStatusLEDs(CRGB::Orange);
+          isWiFiConnected = wm.autoConnect();
+          if (!isWiFiConnected) {
+            Serial.println(F("WiFi reconnection failed, will retry on next loop"));
+            delay(RETRY_TIMEOUT);
+            continue;
+          }
+          Serial.println(F("WiFi reconnected successfully"));
+        }
+        
+        delay(RETRY_TIMEOUT); // Wait before retry
+      }
+      
+      metarSuccess = getMetars();
+      
+      if (metarSuccess) {
+        Serial.println(F("METAR fetch successful!"));
+        break;
+      } else {
+        Serial.print(F("METAR fetch failed on attempt "));
+        Serial.println(attempt);
+      }
+    }
+    
+    if (metarSuccess) {
       Serial.println(F("Refreshing LEDs."));
       FastLED.show();
       if ((DO_LIGHTNING && lightningLeds.size() > 0) || (DO_WINDS && windLeds.size() > 0) || USE_LIGHT_SENSOR || (DO_WINDS && highwindLeds.size() > 0)) {
@@ -697,14 +748,15 @@ void loop() {
         delay(REQUEST_INTERVAL);
       }
     } else {
-      // Web request failed - set all non-legend lights to black
-      Serial.println(F("METAR request failed! Setting all non-legend LEDs to black."));
+      // All retry attempts failed - set all non-legend lights to black
+      Serial.println(F("All METAR retry attempts failed! Setting all non-legend LEDs to black."));
+      Serial.println(F("Will retry on next loop cycle."));
       for (int i = 5; i < NUM_AIRPORTS; i++) {
         leds[i] = CRGB::Black;
       }
       FastLED.show();
       digitalWrite(LED_BUILTIN, HIGH);
-      delay(RETRY_TIMEOUT); // try again if unsuccessful
+      delay(RETRY_TIMEOUT); // Wait before next loop cycle
     }
   } else {
     digitalWrite(LED_BUILTIN, HIGH);
@@ -781,8 +833,24 @@ bool getMetars(){
   WiFiClientSecure client;
   client.setInsecure();
   Serial.println(F("\nStarting connection to server..."));
+  Serial.print(F("Connecting to: "));
+  Serial.print(SERVER);
+  Serial.println(F(":443"));
+  
+  // Check WiFi status before attempting connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println(F("WiFi not connected! Cannot connect to server."));
+    client.stop();
+    return false;
+  }
+  
   if (!client.connect(SERVER, 443)) {
-    Serial.println(F("Connection failed!"));
+    Serial.println(F("HTTPS connection to server failed!"));
+    Serial.print(F("WiFi status: "));
+    Serial.println(WiFi.status());
+    Serial.print(F("WiFi RSSI: "));
+    Serial.print(WiFi.RSSI());
+    Serial.println(F(" dBm"));
     client.stop();
     return false;
   } else {
