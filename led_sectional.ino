@@ -393,7 +393,7 @@ std::vector<String> airports({
 
 #define DEBUG false
 
-#define READ_TIMEOUT 15     // Cancel query if no data received (seconds)
+#define READ_TIMEOUT 30     // Cancel query if no data received (seconds) - increased for slow connections
 #define RETRY_TIMEOUT 15000 // in ms
 #define MAX_RETRY_ATTEMPTS 3 // Number of times to retry METAR fetch before giving up
 
@@ -547,6 +547,9 @@ void setStatusLEDs(CRGB color) {
 void blinkLEDs(const std::vector<unsigned short int>& ledList, CRGB blinkColor, const __FlashStringHelper* effectName, bool fadeMode = false) {
   if (ledList.empty()) return;
   
+  // Only show detailed output on first loop (loops == 1), not on every blink
+  bool showDetails = (loops == 1);
+  
   // Store original colors
   std::vector<CRGB> originalColors(ledList.size());
   for (size_t i = 0; i < ledList.size(); ++i) {
@@ -560,12 +563,14 @@ void blinkLEDs(const std::vector<unsigned short int>& ledList, CRGB blinkColor, 
       leds[currentLed] = blinkColor;
     }
     
-    // Serial output
-    Serial.print(effectName);
-    Serial.print(F(" on LED: "));
-    Serial.print(currentLed);
-    Serial.print(F(", Airport Code: "));
-    Serial.println(airports[currentLed]);
+    // Serial output - only on first loop
+    if (showDetails) {
+      Serial.print(effectName);
+      Serial.print(F(" on LED: "));
+      Serial.print(currentLed);
+      Serial.print(F(", Airport Code: "));
+      Serial.println(airports[currentLed]);
+    }
   }
   
   delay(25); // extra delay seems necessary with light sensor
@@ -894,6 +899,7 @@ bool getMetars(){
 
     // Skip HTTP headers to find JSON content
     bool foundJson = false;
+    int expectedContentLength = 0;
     String line = "";
     line.reserve(100); // Reserve space for header lines
     
@@ -905,9 +911,19 @@ bool getMetars(){
           if (line.length() == 0 || (line.length() == 1 && line.charAt(0) == '\r')) {
             foundJson = true;
             Serial.println(F("Found end of HTTP headers, JSON content follows"));
+            if (expectedContentLength > 0) {
+              Serial.print(F("Expected Content-Length: "));
+              Serial.print(expectedContentLength);
+              Serial.println(F(" bytes"));
+            }
           } else {
             Serial.print(F("Header: "));
             Serial.println(line);
+            
+            // Parse Content-Length header
+            if (line.startsWith("Content-Length: ")) {
+              expectedContentLength = line.substring(16).toInt();
+            }
           }
           line = "";
         } else if (c != '\r') {
@@ -929,16 +945,41 @@ bool getMetars(){
 
     // Read JSON response into string
     String jsonResponse = "";
-    jsonResponse.reserve(16384); // Reserve more space for JSON (your response is ~14KB)
+    
+    // Reserve space based on expected content length, or default to 16KB
+    size_t reserveSize = (expectedContentLength > 0) ? expectedContentLength + 512 : 16384;
+    jsonResponse.reserve(reserveSize);
     
     Serial.println(F("Reading JSON response..."));
-    int charCount = 0;
+    Serial.print(F("Reserved "));
+    Serial.print(reserveSize);
+    Serial.println(F(" bytes for JSON"));
     
+    int charCount = 0;
+    unsigned long lastDataTime = millis(); // Track when we last received data
+    
+    // Read all available data until connection closes or we have enough
     while (client.connected() || client.available()) {
-      if (client.available()) {
+      // Read data in chunks for efficiency
+      while (client.available()) {
         char c = client.read();
+        size_t prevLength = jsonResponse.length();
         jsonResponse += c;
         charCount++;
+        
+        // Verify the string actually grew (detect silent memory allocation failures)
+        if (jsonResponse.length() != prevLength + 1) {
+          Serial.println(F("ERROR: String concatenation failed - out of memory!"));
+          Serial.print(F("Read "));
+          Serial.print(charCount);
+          Serial.print(F(" chars but String length is only "));
+          Serial.println(jsonResponse.length());
+          printMemoryInfo();
+          client.stop();
+          return false;
+        }
+        
+        lastDataTime = millis(); // Reset timeout whenever we get data
         
         // Print progress every 1000 characters
         if (charCount % 1000 == 0) {
@@ -947,12 +988,29 @@ bool getMetars(){
           Serial.println(F(" characters"));
         }
         
-        t = millis(); // Reset timeout
-      } else if ((millis() - t) >= (READ_TIMEOUT * 1000)) {
-        Serial.println(F("---Timeout reading JSON---"));
-        break;
+        // Check if we have all expected data
+        if (expectedContentLength > 0 && charCount >= expectedContentLength) {
+          Serial.println(F("Received expected amount of data"));
+          goto reading_complete; // Break out of nested loops
+        }
+      }
+      
+      // No more data available right now
+      // If connection is still open, wait a bit for more data
+      if (client.connected()) {
+        // Only wait if we haven't exceeded timeout
+        if ((millis() - lastDataTime) >= (READ_TIMEOUT * 1000)) {
+          Serial.println(F("---Timeout: No data received for READ_TIMEOUT seconds---"));
+          Serial.print(F("Read "));
+          Serial.print(charCount);
+          Serial.println(F(" characters before timeout"));
+          break;
+        }
+        delay(50); // Wait for more data to arrive
       }
     }
+    
+    reading_complete:
     
     client.stop();
     
@@ -962,21 +1020,55 @@ bool getMetars(){
     }
 
     Serial.print(F("JSON Response length: "));
-    Serial.println(jsonResponse.length());
+    Serial.print(jsonResponse.length());
+    Serial.println(F(" characters"));
     
-    // Print first 200 characters of JSON for debugging
+    // Validate we received the expected amount of data
+    if (expectedContentLength > 0 && jsonResponse.length() < expectedContentLength) {
+      Serial.print(F("WARNING: Incomplete JSON! Expected "));
+      Serial.print(expectedContentLength);
+      Serial.print(F(" bytes but received "));
+      Serial.print(jsonResponse.length());
+      Serial.print(F(" bytes ("));
+      Serial.print(expectedContentLength - jsonResponse.length());
+      Serial.println(F(" bytes missing)"));
+      // Try to parse anyway - sometimes trailing whitespace is not critical
+    }
+    
+    // Validate JSON looks complete (starts with [ or { and ends with ] or })
     if (jsonResponse.length() > 0) {
+      char firstChar = jsonResponse.charAt(0);
+      char lastChar = jsonResponse.charAt(jsonResponse.length() - 1);
+      
+      Serial.print(F("JSON first char: '"));
+      Serial.print(firstChar);
+      Serial.print(F("', last char: '"));
+      Serial.print(lastChar);
+      Serial.println(F("'"));
+      
+      if ((firstChar == '[' && lastChar != ']') || (firstChar == '{' && lastChar != '}')) {
+        Serial.println(F("ERROR: JSON appears truncated (mismatched brackets)"));
+        Serial.println(F("Last 50 characters of received data:"));
+        int startPos = max(0, (int)jsonResponse.length() - 50);
+        Serial.println(jsonResponse.substring(startPos));
+        return false;
+      }
+      
       Serial.println(F("JSON Preview (first 200 chars):"));
       Serial.println(jsonResponse.substring(0, min(200, (int)jsonResponse.length())));
     }
 
     // Parse JSON using ArduinoJson
     // Calculate needed capacity based on your actual response size
-    const size_t capacity = JSON_ARRAY_SIZE(30) + 30 * JSON_OBJECT_SIZE(30) + jsonResponse.length() + 1000;
+    // Use more generous estimates: 30 airports with ~40 fields each
+    const size_t capacity = JSON_ARRAY_SIZE(35) + 35 * JSON_OBJECT_SIZE(40) + jsonResponse.length() + 2048;
     DynamicJsonDocument doc(capacity);
 
     Serial.print(F("Allocated JSON document capacity: "));
     Serial.println(capacity);
+    
+    // Check available heap before parsing
+    printMemoryInfo();
 
     DeserializationError error = deserializeJson(doc, jsonResponse);
     if (error) {
@@ -984,6 +1076,27 @@ bool getMetars(){
       Serial.println(error.c_str());
       Serial.print(F("Error code: "));
       Serial.println((int)error.code());
+      
+      // Provide more detailed error information
+      if (error == DeserializationError::InvalidInput) {
+        Serial.println(F("InvalidInput error - JSON may be truncated or malformed"));
+        Serial.println(F("Attempting to diagnose issue..."));
+        
+        // Count brackets to help diagnose
+        int openBrackets = 0;
+        int closeBrackets = 0;
+        for (size_t i = 0; i < jsonResponse.length(); i++) {
+          if (jsonResponse.charAt(i) == '[') openBrackets++;
+          if (jsonResponse.charAt(i) == ']') closeBrackets++;
+        }
+        Serial.print(F("Open brackets: "));
+        Serial.print(openBrackets);
+        Serial.print(F(", Close brackets: "));
+        Serial.println(closeBrackets);
+      } else if (error == DeserializationError::NoMemory) {
+        Serial.println(F("NoMemory error - increase JSON document capacity"));
+      }
+      
       return false;
     }
     
