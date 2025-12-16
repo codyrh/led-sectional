@@ -218,8 +218,9 @@ bool compareStringP(const String& str, const char* progmemStr) {
 // BOARD CONFIGURATIONS
 // ===========================
 // Select your board configuration by uncommenting ONE of the following lines:
-//#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
-#define BOARD_CONFIG_HOME          // Home - 30 LEDs
+#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
+//#define BOARD_CONFIG_HOME          // Home - 30 LEDs
+//#define BOARD_CONFIG_ROBYN          // Robyn - 30 LEDs
 //#define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs  
 //#define BOARD_CONFIG_CUSTOM      // Custom configuration
 
@@ -240,6 +241,15 @@ struct BoardConfig {
   #define COLOR_ORDER RGB
   #define BRIGHTNESS 70
   #define HIGH_WIND_THRESHOLD 20   // Winds or gusting winds above this cause LED to blink orange
+  // Airport list defined below in airports vector
+#endif
+
+#ifdef BOARD_CONFIG_ROBYN
+  #define NUM_AIRPORTS 30
+  #define LED_TYPE WS2811
+  #define COLOR_ORDER RGB
+  #define BRIGHTNESS 70
+  #define HIGH_WIND_THRESHOLD 25   // Winds or gusting winds above this cause LED to blink orange
   // Airport list defined below in airports vector
 #endif
 
@@ -273,7 +283,7 @@ struct BoardConfig {
 #endif
 
 // Validate that exactly one configuration is selected
-#if defined(BOARD_CONFIG_HOME) + defined(BOARD_CONFIG_ASA) + defined(BOARD_CONFIG_MARK_L) + defined(BOARD_CONFIG_CUSTOM) != 1
+#if defined(BOARD_CONFIG_HOME) + defined(BOARD_CONFIG_ROBYN) + defined(BOARD_CONFIG_ASA) + defined(BOARD_CONFIG_MARK_L) + defined(BOARD_CONFIG_CUSTOM) != 1
   #error "ERROR: You must uncomment exactly ONE board configuration. Check the BOARD CONFIGURATIONS section."
 #endif
 
@@ -294,6 +304,9 @@ boolean VERY_HIGH_WINDS = false; // Initialize global var
 WiFiManager wm;
 #define WIFI_TIMEOUT 60        // Connection timeout in seconds for call to setConfigPortalTimeout
 boolean isWiFiConnected = false;
+boolean inStationMode = false;   // Track if we're in station mode due to WiFi failure
+unsigned long lastStationBlink = 0;  // Track last time we blinked orange in station mode
+#define STATION_BLINK_INTERVAL 60000  // Blink orange once per minute (60000 ms)
 
 // Define the array of leds
 CRGB leds[NUM_AIRPORTS];
@@ -343,6 +356,18 @@ std::vector<unsigned short int> highwindLeds;
 // 5. Airport codes should be ICAO format (4 characters, starting with K for US)
 
 #ifdef BOARD_CONFIG_HOME
+// Home Configuration - 30 LEDs total (5 legend + 25 airports)
+std::vector<String> airports({ 
+  "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
+  "KUIL", "NULL", "KHQM", "NULL", "KSHN",         // Airports 6-10
+  "KOLM", "KGRF", "KPLU", "KTCM", "KTIW",         // Airports 11-15  
+  "KPWT", "KSEA", "KRNT", "KBFI", "KPAE",         // Airports 16-20
+  "KAWO", "K0S9", "KNUW", "KBVS", "KBLI",         // Airports 21-25
+  "KORS", "KFHR", "CYYJ", "NULL", "KCLM"          // Airports 26-30
+});
+#endif
+
+#ifdef BOARD_CONFIG_ROBYN
 // Home Configuration - 30 LEDs total (5 legend + 25 airports)
 std::vector<String> airports({ 
   "VFR", "MVFR", "IFR", "LIFR", "WVFR",           // Legend (don't change)
@@ -431,6 +456,8 @@ void printBoardConfig() {
   Serial.println(F("Configuration: ASA"));
 #elif defined(BOARD_CONFIG_HOME)
   Serial.println(F("Configuration: HOME"));
+  #elif defined(BOARD_CONFIG_ROBYN)
+  Serial.println(F("Configuration: ROBYN"));
 #elif defined(BOARD_CONFIG_MARK_L)
   Serial.println(F("Configuration: MARK_L"));
 #elif defined(BOARD_CONFIG_CUSTOM)
@@ -518,7 +545,7 @@ void setup() {
   leds[1] = CRGB::Blue;    // MVFR
   leds[2] = CRGB::Red;     // IFR
   leds[3] = CRGB::Magenta; // LIFR
-  leds[4] = CRGB::Yellow;  // WVFR
+  leds[4] = CRGB::Orange;  // WVFR
   FastLED.show();
 
   WiFi.mode(WIFI_STA);
@@ -633,6 +660,46 @@ void loop() {
   if (DO_LIGHTNING || DO_WINDS || USE_LIGHT_SENSOR)
     loopThreshold = REQUEST_INTERVAL / LOOP_INTERVAL;
 
+  // Handle station mode blinking when WiFi is not connected
+  if (inStationMode) {
+    // Check if WiFi has reconnected (user may have configured via portal)
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println(F("WiFi reconnected! Exiting station mode."));
+      Serial.print(F("IP address: "));
+      Serial.println(WiFi.localIP());
+      isWiFiConnected = true;
+      inStationMode = false;
+      setStatusLEDs(CRGB::Purple);
+      delay(1000);
+      return;
+    }
+    
+    unsigned long currentMillis = millis();
+    
+    // Check if it's time to blink orange (once per minute)
+    if (currentMillis - lastStationBlink >= STATION_BLINK_INTERVAL) {
+      Serial.println(F("Station mode: Blinking orange (connect to AutoConnectAP to configure WiFi)"));
+      
+      // Blink all non-legend LEDs orange
+      for (int i = 5; i < NUM_AIRPORTS; i++) {
+        leds[i] = CRGB::Orange;
+      }
+      FastLED.show();
+      delay(500);  // Keep orange visible for 500ms
+      
+      // Return to black
+      for (int i = 5; i < NUM_AIRPORTS; i++) {
+        leds[i] = CRGB::Black;
+      }
+      FastLED.show();
+      
+      lastStationBlink = currentMillis;
+    }
+    
+    delay(LOOP_INTERVAL);  // Small delay before next loop iteration
+    return;  // Skip normal processing while in station mode
+  }
+  
   // Connect to WiFi or verify connection
   if (!isWiFiConnected || WiFi.status() != WL_CONNECTED) {
     if (ledStatus) {
@@ -657,12 +724,38 @@ void loop() {
         setStatusLEDs(CRGB::Purple);
       }
       ledStatus = false;
+      inStationMode = false;  // Clear station mode flag on successful connection
     }
     else {
       Serial.println(F("Failed to connect to local network or hit timeout"));
-      setStatusLEDs(CRGB::Orange);
+      Serial.println(F("Starting configuration portal - connect to AutoConnectAP to configure WiFi"));
+      
+      // Blank all non-legend LEDs (set to black)
+      for (int i = 5; i < NUM_AIRPORTS; i++) {
+        leds[i] = CRGB::Black;
+      }
+      FastLED.show();
+      
       ledStatus = true;
-      wm.autoConnect("AutoConnectAP");  // should popup signin else goto 192.168.4.1 after connecting to AutoConnectAP or ESPxxxx
+      lastStationBlink = millis();  // Initialize blink timer
+      
+      // Try to start config portal and connect
+      bool portalConnected = wm.autoConnect("MetarMapSetup");
+      
+      if (portalConnected && WiFi.status() == WL_CONNECTED) {
+        // Successfully connected via config portal
+        Serial.println(F("Connected via configuration portal"));
+        Serial.print(F("IP address: "));
+        Serial.println(WiFi.localIP());
+        isWiFiConnected = true;
+        inStationMode = false;
+        setStatusLEDs(CRGB::Purple);
+        ledStatus = false;
+      } else {
+        // Config portal timed out or failed - enter station mode
+        Serial.println(F("Entering station mode - LEDs will be blanked with orange blink once per minute"));
+        inStationMode = true;
+      }
       return;
     }
   }
@@ -672,9 +765,9 @@ void loop() {
     blinkLEDs(lightningLeds, CRGB::White, F("Lightning"));
   }
 
-  // Blink yellow if winds or gusts exceed HIGH_WIND_THRESHOLD
+  // Blink orange if winds or gusts exceed HIGH_WIND_THRESHOLD
   if (DO_WINDS && highwindLeds.size() > 0) {
-    blinkLEDs(highwindLeds, CRGB::Yellow, F("Very high wind or gusts"));
+    blinkLEDs(highwindLeds, CRGB::Orange, F("Very high wind or gusts"));
   }
 
   // Blink clear/black, or fade flight category color, if winds or gusts exceed WIND_THRESHOLD
