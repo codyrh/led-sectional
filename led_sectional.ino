@@ -34,9 +34,18 @@
 
 // To get a look at the JSON output directly from a browser, edit the end of next line for an airport or airport list.
 // It's not identical to what the code receives, but can be helpful.
-// https://aviationweather.gov/api/data/metar?format=json&hoursBeforeNow=3&mostRecentForEachStation=true&ids=KTME,KSGR
-
+//
 /*
+August 14, 2026
+---------------
+API migration update for aviationweather.gov Data API:
+1. Replaced deprecated query parameter hoursBeforeNow with hours.
+2. Removed mostRecentForEachStation because it is not supported on /api/data/metar.
+3. Added client-side filtering that processes the first (most recent) METAR
+  returned for each station and skips older duplicates.
+
+Example: https://aviationweather.gov/api/data/metar?format=json&hours=3&ids=KTME,KSGR
+
 September 4, 2025
 ----------------
 LOOP OPTIMIZATIONS (Added):
@@ -205,8 +214,8 @@ const char LTNG_STR[] PROGMEM = "LTNG";
 // XML tag strings no longer needed for JSON parsing
 
 // Server strings in PROGMEM
-const char SERVER_STR[] PROGMEM = "connect.aviationweather.gov";
-const char BASE_URI_STR[] PROGMEM = "/api/data/metar?format=json&hoursBeforeNow=3&mostRecentForEachStation=true&ids=";
+const char SERVER_STR[] PROGMEM = "aviationweather.gov";
+const char BASE_URI_STR[] PROGMEM = "/api/data/metar?format=json&hours=3&ids=";
 const char USER_AGENT_STR[] PROGMEM = "LED Sectional Client";
 
 // Helper function to compare strings from PROGMEM
@@ -218,8 +227,8 @@ bool compareStringP(const String& str, const char* progmemStr) {
 // BOARD CONFIGURATIONS
 // ===========================
 // Select your board configuration by uncommenting ONE of the following lines:
-#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
-//#define BOARD_CONFIG_HOME          // Home - 30 LEDs
+//#define BOARD_CONFIG_ASA            // ASA - 34 LEDs
+#define BOARD_CONFIG_HOME          // Home - 30 LEDs
 //#define BOARD_CONFIG_ROBYN          // Robyn - 30 LEDs
 //#define BOARD_CONFIG_MARK_L      // Mark L - 29 LEDs  
 //#define BOARD_CONFIG_CUSTOM      // Custom configuration
@@ -1036,125 +1045,25 @@ bool getMetars(){
       return false;
     }
 
-    // Read JSON response into string
-    String jsonResponse = "";
-    
-    // Reserve space based on expected content length, or default to 16KB
-    size_t reserveSize = (expectedContentLength > 0) ? expectedContentLength + 512 : 16384;
-    jsonResponse.reserve(reserveSize);
-    
-    Serial.println(F("Reading JSON response..."));
-    Serial.print(F("Reserved "));
-    Serial.print(reserveSize);
-    Serial.println(F(" bytes for JSON"));
-    
-    int charCount = 0;
-    unsigned long lastDataTime = millis(); // Track when we last received data
-    
-    // Read all available data until connection closes or we have enough
-    while (client.connected() || client.available()) {
-      // Read data in chunks for efficiency
-      while (client.available()) {
-        char c = client.read();
-        size_t prevLength = jsonResponse.length();
-        jsonResponse += c;
-        charCount++;
-        
-        // Verify the string actually grew (detect silent memory allocation failures)
-        if (jsonResponse.length() != prevLength + 1) {
-          Serial.println(F("ERROR: String concatenation failed - out of memory!"));
-          Serial.print(F("Read "));
-          Serial.print(charCount);
-          Serial.print(F(" chars but String length is only "));
-          Serial.println(jsonResponse.length());
-          printMemoryInfo();
-          client.stop();
-          return false;
-        }
-        
-        lastDataTime = millis(); // Reset timeout whenever we get data
-        
-        // Print progress every 1000 characters
-        if (charCount % 1000 == 0) {
-          Serial.print(F("Read "));
-          Serial.print(charCount);
-          Serial.println(F(" characters"));
-        }
-        
-        // Check if we have all expected data
-        if (expectedContentLength > 0 && charCount >= expectedContentLength) {
-          Serial.println(F("Received expected amount of data"));
-          goto reading_complete; // Break out of nested loops
-        }
-      }
-      
-      // No more data available right now
-      // If connection is still open, wait a bit for more data
-      if (client.connected()) {
-        // Only wait if we haven't exceeded timeout
-        if ((millis() - lastDataTime) >= (READ_TIMEOUT * 1000)) {
-          Serial.println(F("---Timeout: No data received for READ_TIMEOUT seconds---"));
-          Serial.print(F("Read "));
-          Serial.print(charCount);
-          Serial.println(F(" characters before timeout"));
-          break;
-        }
-        delay(50); // Wait for more data to arrive
-      }
-    }
-    
-    reading_complete:
-    
-    client.stop();
-    
-    if (jsonResponse.length() == 0) {
-      Serial.println(F("No JSON data received"));
-      return false;
-    }
+    // Parse JSON directly from the socket stream instead of buffering the whole
+    // ~40KB response into a String first - the double-buffering (String +
+    // JsonDocument existing at once) was exhausting heap and causing
+    // "String concatenation failed" out-of-memory errors.
+    client.setTimeout(READ_TIMEOUT * 1000);
 
-    Serial.print(F("JSON Response length: "));
-    Serial.print(jsonResponse.length());
-    Serial.println(F(" characters"));
-    
-    // Validate we received the expected amount of data
-    if (expectedContentLength > 0 && jsonResponse.length() < expectedContentLength) {
-      Serial.print(F("WARNING: Incomplete JSON! Expected "));
-      Serial.print(expectedContentLength);
-      Serial.print(F(" bytes but received "));
-      Serial.print(jsonResponse.length());
-      Serial.print(F(" bytes ("));
-      Serial.print(expectedContentLength - jsonResponse.length());
-      Serial.println(F(" bytes missing)"));
-      // Try to parse anyway - sometimes trailing whitespace is not critical
-    }
-    
-    // Validate JSON looks complete (starts with [ or { and ends with ] or })
-    if (jsonResponse.length() > 0) {
-      char firstChar = jsonResponse.charAt(0);
-      char lastChar = jsonResponse.charAt(jsonResponse.length() - 1);
-      
-      Serial.print(F("JSON first char: '"));
-      Serial.print(firstChar);
-      Serial.print(F("', last char: '"));
-      Serial.print(lastChar);
-      Serial.println(F("'"));
-      
-      if ((firstChar == '[' && lastChar != ']') || (firstChar == '{' && lastChar != '}')) {
-        Serial.println(F("ERROR: JSON appears truncated (mismatched brackets)"));
-        Serial.println(F("Last 50 characters of received data:"));
-        int startPos = max(0, (int)jsonResponse.length() - 50);
-        Serial.println(jsonResponse.substring(startPos));
-        return false;
-      }
-      
-      Serial.println(F("JSON Preview (first 200 chars):"));
-      Serial.println(jsonResponse.substring(0, min(200, (int)jsonResponse.length())));
-    }
+    // Only keep the fields doColor() actually needs. Each airport object in the
+    // response has ~40 fields; filtering keeps the JsonDocument small even
+    // though we may receive multiple observations per station over 3 hours.
+    StaticJsonDocument<256> filter;
+    JsonObject filterObj = filter.to<JsonArray>().createNestedObject();
+    filterObj["icaoId"] = true;
+    filterObj["fltCat"] = true;
+    filterObj["wspd"] = true;
+    filterObj["wxString"] = true;
+    filterObj["rawOb"] = true;
 
-    // Parse JSON using ArduinoJson
-    // Calculate needed capacity based on your actual response size
-    // Use more generous estimates: 30 airports with ~40 fields each
-    const size_t capacity = JSON_ARRAY_SIZE(35) + 35 * JSON_OBJECT_SIZE(40) + jsonResponse.length() + 2048;
+    const int maxEntries = NUM_AIRPORTS * 3; // allow for multiple obs per station
+    const size_t capacity = JSON_ARRAY_SIZE(maxEntries) + maxEntries * JSON_OBJECT_SIZE(5) + maxEntries * 256 + 2048;
     DynamicJsonDocument doc(capacity);
 
     Serial.print(F("Allocated JSON document capacity: "));
@@ -1163,36 +1072,34 @@ bool getMetars(){
     // Check available heap before parsing
     printMemoryInfo();
 
-    DeserializationError error = deserializeJson(doc, jsonResponse);
+    Serial.println(F("Parsing JSON response from stream..."));
+    DeserializationError error = deserializeJson(doc, client, DeserializationOption::Filter(filter));
+    client.stop();
+
     if (error) {
       Serial.print(F("deserializeJson() failed: "));
       Serial.println(error.c_str());
       Serial.print(F("Error code: "));
       Serial.println((int)error.code());
       
-      // Provide more detailed error information
-      if (error == DeserializationError::InvalidInput) {
-        Serial.println(F("InvalidInput error - JSON may be truncated or malformed"));
-        Serial.println(F("Attempting to diagnose issue..."));
-        
-        // Count brackets to help diagnose
-        int openBrackets = 0;
-        int closeBrackets = 0;
-        for (size_t i = 0; i < jsonResponse.length(); i++) {
-          if (jsonResponse.charAt(i) == '[') openBrackets++;
-          if (jsonResponse.charAt(i) == ']') closeBrackets++;
-        }
-        Serial.print(F("Open brackets: "));
-        Serial.print(openBrackets);
-        Serial.print(F(", Close brackets: "));
-        Serial.println(closeBrackets);
-      } else if (error == DeserializationError::NoMemory) {
+      if (error == DeserializationError::NoMemory) {
         Serial.println(F("NoMemory error - increase JSON document capacity"));
       }
       
       return false;
     }
     
+    if (!doc.is<JsonArray>()) {
+      Serial.println(F("JSON response root is not an array"));
+      return false;
+    }
+
+    JsonArray array = doc.as<JsonArray>();
+    if (array.size() == 0) {
+      Serial.println(F("JSON response contained no METAR records"));
+      return false;
+    }
+
     Serial.println(F("JSON parsing successful!"));
 
     // Initialize weather LEDs to black before processing new data (preserve legend LEDs 0-4)
@@ -1201,12 +1108,13 @@ bool getMetars(){
     }
     
     // Process each airport in the JSON array
-    JsonArray array = doc.as<JsonArray>();
     Serial.print(F("Processing "));
     Serial.print(array.size());
     Serial.println(F(" airports from JSON"));
     
     int processedAirports = 0;
+    std::vector<String> processedAirportIds;
+    processedAirportIds.reserve(NUM_AIRPORTS);
     
     for (JsonObject airport : array) {
       MetarData currentMetar;
@@ -1236,6 +1144,24 @@ bool getMetars(){
       }
       
       currentMetar.wxString = airport["wxString"] | "";  // Handle missing weather string
+
+      // Results are returned newest-first. Process the first report for each
+      // station and skip older duplicates, matching the previous XML parser.
+      bool stationAlreadyProcessed = false;
+      for (const String& processedAirport : processedAirportIds) {
+        if (processedAirport == currentMetar.icaoId) {
+          stationAlreadyProcessed = true;
+          break;
+        }
+      }
+
+      if (stationAlreadyProcessed) {
+        Serial.print(F("Skipping older METAR for station: "));
+        Serial.println(currentMetar.icaoId);
+        continue;
+      }
+
+      processedAirportIds.push_back(currentMetar.icaoId);
       
       // Debug output for first few airports
       if (processedAirports < 3) {
